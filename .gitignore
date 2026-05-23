@@ -1,0 +1,11 @@
+target/
+/.idea/
+/.vscode/
+*.swp
+*.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+*.profraw
+*.profdata
