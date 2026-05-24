@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 use crate::formula::ChordFormula;
-use crate::identify::inferred_omissions;
+use crate::identify::{can_infer_omission, can_omit, inferred_omissions};
 use crate::notes::{
     Fingering, GuitarTuning, Instrument, NoteName, PitchClass, PitchSet, STANDARD_TUNING,
 };
@@ -115,6 +115,13 @@ pub fn voicings_with_tuning(
     let suffix_sets = suffix_pitch_sets(&per_string, tuning);
     let suffix_frets = suffix_fret_stats(&per_string);
 
+    let mut non_omissible_pitches = target;
+    for tone in formula.tones() {
+        if can_infer_omission(tone, &formula) {
+            non_omissible_pitches.bits &= !(1u16 << tone.pitch_class);
+        }
+    }
+
     let mut frets = [None; MAX_STRING_COUNT];
     let search = VoicingSearch {
         per_string: &per_string,
@@ -123,6 +130,7 @@ pub fn voicings_with_tuning(
         suffix_has_open: &suffix_frets.has_open,
         target,
         formula_target,
+        non_omissible_pitches,
         bass_rule,
         bass_spelling: chord.bass,
         formula: &formula,
@@ -207,6 +215,7 @@ struct VoicingSearch<'a> {
     suffix_has_open: &'a [bool; MAX_STRING_COUNT + 1],
     target: PitchSet,
     formula_target: PitchSet,
+    non_omissible_pitches: PitchSet,
     bass_rule: BassRule,
     bass_spelling: Option<NoteName>,
     formula: &'a ChordFormula,
@@ -331,7 +340,9 @@ impl TopVoicingCollector {
         }
     }
 
-    fn finish(self) -> Vec<VoicingCandidate> {
+    fn finish(mut self) -> Vec<VoicingCandidate> {
+        let ceiling = self.ceiling;
+        self.retained.retain(|candidate| candidate.score <= ceiling);
         self.retained
     }
 
@@ -363,9 +374,6 @@ impl TopVoicingCollector {
             self.best_scores[self.limit - 1].saturating_add(MAX_DIVERSITY_SCORE_WINDOW)
         };
 
-        if next < self.ceiling {
-            self.retained.retain(|candidate| candidate.score <= next);
-        }
         self.ceiling = next;
     }
 }
@@ -540,17 +548,20 @@ fn partial_voicing_can_complete(
     }
 
     let current = state.pitch_set;
+    let remaining_strings = search.string_count() - next_string;
+    let non_omissible_not_played_bits = search.non_omissible_pitches.bits & !current.bits;
+    if non_omissible_not_played_bits.count_ones() as usize > remaining_strings {
+        return false;
+    }
+
     let available = current.union(search.suffix_sets[next_string]);
-    let missing_required = search.target.difference(available);
-    if missing_required
-        .iter()
-        .any(|pitch| !search.formula_target.contains(pitch))
-    {
+    let missing_required_bits = search.target.bits & !available.bits;
+    if (missing_required_bits & !search.formula_target.bits) != 0 {
         return false;
     }
 
     let missing_formula = search.formula_target.difference(available);
-    inferred_omissions(missing_formula, search.formula).is_some()
+    can_omit(missing_formula, search.formula)
 }
 
 fn partial_voicing_score_floor(

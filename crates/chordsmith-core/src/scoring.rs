@@ -108,34 +108,58 @@ pub(crate) fn rank_voicing_candidates(
 }
 
 pub(crate) fn rank_diverse_voicing_candidates(
-    mut candidates: Vec<VoicingCandidate>,
+    candidates: Vec<VoicingCandidate>,
     limit: usize,
 ) -> Vec<VoicingCandidate> {
     if limit == 0 {
         return Vec::new();
     }
 
+    let mut candidates_with_family: Vec<(VoicingCandidate, VoicingFamily)> = candidates
+        .into_iter()
+        .map(|c| {
+            let family = voicing_family(&c.frets, c.string_count);
+            (c, family)
+        })
+        .collect();
+
     let mut selected = Vec::new();
-    while selected.len() < limit && !candidates.is_empty() {
-        let best_raw_score = candidates
+    let mut family_counts = [0u32; VOICING_FAMILY_COUNT];
+    let mut position_counts = [0u32; POSITION_FAMILY_COUNT];
+
+    while selected.len() < limit && !candidates_with_family.is_empty() {
+        let best_raw_score = candidates_with_family
             .first()
-            .map(|candidate| candidate.score)
+            .map(|(c, _)| c.score)
             .unwrap_or(0);
         let candidate_ceiling =
             best_raw_score.saturating_add(diversity_score_window(best_raw_score));
-        let best_idx = candidates
+
+        let best_idx = candidates_with_family
             .iter()
             .enumerate()
-            .filter(|(_, candidate)| candidate.score <= candidate_ceiling)
-            .min_by(|(_, left), (_, right)| {
-                effective_voicing_candidate_score(left, &selected)
-                    .cmp(&effective_voicing_candidate_score(right, &selected))
+            .filter(|(_, (c, _))| c.score <= candidate_ceiling)
+            .min_by(|(_, (left, left_family)), (_, (right, right_family))| {
+                let left_family_count = family_counts[left_family.index()];
+                let left_pos_count = position_counts[left_family.position.index()];
+                let left_eff_score = left.score + left_family_count * 5 + left_pos_count;
+
+                let right_family_count = family_counts[right_family.index()];
+                let right_pos_count = position_counts[right_family.position.index()];
+                let right_eff_score = right.score + right_family_count * 5 + right_pos_count;
+
+                left_eff_score
+                    .cmp(&right_eff_score)
                     .then(left.score.cmp(&right.score))
                     .then_with(|| compare_voicing_candidates(left, right))
             })
             .map(|(idx, _)| idx)
             .unwrap_or(0);
-        selected.push(candidates.remove(best_idx));
+
+        let (chosen_candidate, chosen_family) = candidates_with_family.remove(best_idx);
+        family_counts[chosen_family.index()] += 1;
+        position_counts[chosen_family.position.index()] += 1;
+        selected.push(chosen_candidate);
     }
 
     selected.sort_by(compare_voicing_candidates);
@@ -261,31 +285,12 @@ fn diversity_score_window(best_score: u32) -> u32 {
     window
 }
 
-fn effective_voicing_candidate_score(
-    candidate: &VoicingCandidate,
-    selected: &[VoicingCandidate],
-) -> u32 {
-    let family = voicing_family(&candidate.frets, candidate.string_count);
-    candidate.score
-        + u32::try_from(selected_family_count(selected, family)).unwrap_or(0) * 5
-        + u32::try_from(selected_position_count(selected, family.position)).unwrap_or(0)
-}
-
-fn selected_family_count(selected: &[VoicingCandidate], family: VoicingFamily) -> usize {
-    selected
-        .iter()
-        .filter(|candidate| voicing_family(&candidate.frets, candidate.string_count) == family)
-        .count()
-}
-
-fn selected_position_count(selected: &[VoicingCandidate], position: PositionFamily) -> usize {
-    selected
-        .iter()
-        .filter(|candidate| {
-            voicing_family(&candidate.frets, candidate.string_count).position == position
-        })
-        .count()
-}
+const POSITION_BUCKET_COUNT: usize = 4;
+const POSITION_FAMILY_COUNT: usize = 1 + POSITION_BUCKET_COUNT * 2;
+const STRING_BAND_COUNT: usize = 5;
+const STRING_DENSITY_COUNT: usize = 3;
+const VOICING_FAMILY_COUNT: usize =
+    POSITION_FAMILY_COUNT * STRING_BAND_COUNT * STRING_DENSITY_COUNT * 2;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct VoicingFamily {
@@ -295,11 +300,31 @@ struct VoicingFamily {
     internal_mute: bool,
 }
 
+impl VoicingFamily {
+    const fn index(self) -> usize {
+        (((self.position.index() * STRING_BAND_COUNT + self.string_band.index())
+            * STRING_DENSITY_COUNT
+            + self.density.index())
+            * 2)
+            + self.internal_mute as usize
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum PositionFamily {
     OpenPosition,
     OpenHigh(PositionBucket),
     Closed(PositionBucket),
+}
+
+impl PositionFamily {
+    const fn index(self) -> usize {
+        match self {
+            Self::OpenPosition => 0,
+            Self::OpenHigh(bucket) => 1 + bucket.index(),
+            Self::Closed(bucket) => 1 + POSITION_BUCKET_COUNT + bucket.index(),
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -308,6 +333,17 @@ enum PositionBucket {
     Middle,
     High,
     Upper,
+}
+
+impl PositionBucket {
+    const fn index(self) -> usize {
+        match self {
+            Self::Low => 0,
+            Self::Middle => 1,
+            Self::High => 2,
+            Self::Upper => 3,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -319,11 +355,33 @@ enum StringBand {
     High,
 }
 
+impl StringBand {
+    const fn index(self) -> usize {
+        match self {
+            Self::Full => 0,
+            Self::Wide => 1,
+            Self::Low => 2,
+            Self::Middle => 3,
+            Self::High => 4,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum StringDensity {
     Full,
     Four,
     Small,
+}
+
+impl StringDensity {
+    const fn index(self) -> usize {
+        match self {
+            Self::Full => 0,
+            Self::Four => 1,
+            Self::Small => 2,
+        }
+    }
 }
 
 fn voicing_family(frets: &[Option<u8>; MAX_STRING_COUNT], string_count: usize) -> VoicingFamily {

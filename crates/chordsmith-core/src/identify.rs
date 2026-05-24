@@ -11,7 +11,9 @@ use crate::notes::{
     STANDARD_TUNING, play_fingering,
 };
 use crate::parse::{push_unique, validate_descriptor};
-use crate::symbol::{Alteration, ChordSpec, Extension, MAX_ALTERATIONS, Quality, Seventh};
+use crate::symbol::{
+    Alteration, ChordSpec, Extension, MAX_ALTERATIONS, MAX_OMISSIONS, Quality, Seventh,
+};
 use crate::{ChordsmithError, MAX_NOTE_ACCIDENTALS};
 
 const PITCH_SET_KEY_COUNT: usize = 1 << 12;
@@ -624,12 +626,24 @@ fn inline_alterations(values: &[Alteration]) -> InlineVec<Alteration, MAX_ALTERA
     out
 }
 
+pub(crate) fn can_omit(missing: PitchSet, formula: &ChordFormula) -> bool {
+    inferred_omission_degrees(missing, formula).is_some()
+}
+
 pub(crate) fn inferred_omissions(missing: PitchSet, formula: &ChordFormula) -> Option<Vec<String>> {
+    let omissions = inferred_omission_degrees(missing, formula)?;
+    Some(omissions.iter().map(|degree| degree.to_string()).collect())
+}
+
+fn inferred_omission_degrees(
+    missing: PitchSet,
+    formula: &ChordFormula,
+) -> Option<InlineVec<u8, MAX_OMISSIONS>> {
     if missing.is_empty() {
-        return Some(Vec::new());
+        return Some(InlineVec::default());
     }
 
-    let mut omissions = Vec::new();
+    let mut omissions = InlineVec::default();
     for pitch in missing.iter() {
         let tone = formula.tone_for_pitch(pitch)?;
         if !can_infer_omission(tone, formula) {
@@ -640,7 +654,7 @@ pub(crate) fn inferred_omissions(missing: PitchSet, formula: &ChordFormula) -> O
         }) {
             return None;
         }
-        push_unique_omission(&mut omissions, tone.degree);
+        push_unique_omission_degree(&mut omissions, tone.degree);
     }
 
     if omissions.is_empty() {
@@ -651,22 +665,17 @@ pub(crate) fn inferred_omissions(missing: PitchSet, formula: &ChordFormula) -> O
         return None;
     }
 
-    Some(
-        omissions
-            .into_iter()
-            .map(|degree| degree.to_string())
-            .collect(),
-    )
+    Some(omissions)
 }
 
-fn push_unique_omission(values: &mut Vec<u8>, value: u8) {
+fn push_unique_omission_degree(values: &mut InlineVec<u8, MAX_OMISSIONS>, value: u8) {
     if !values.contains(&value) {
-        values.push(value);
+        let _ = values.push(value);
         values.sort_unstable();
     }
 }
 
-fn can_infer_omission(tone: &ChordTone, formula: &ChordFormula) -> bool {
+pub(crate) fn can_infer_omission(tone: &ChordTone, formula: &ChordFormula) -> bool {
     match tone.degree {
         1 => formula.tones.len() >= 4,
         3 => formula.tones.len() >= 4 && formula_has_intervals(formula, &["b7"]),
