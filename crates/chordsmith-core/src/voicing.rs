@@ -116,6 +116,11 @@ pub fn voicings_with_tuning(
     }
     let suffix_sets = suffix_pitch_sets(&per_string, tuning);
     let suffix_frets = suffix_fret_stats(&per_string);
+    let suffix_required_bass_min =
+        suffix_required_bass_min_pitches(&per_string, tuning, bass_rule.required());
+    if bass_rule.required().is_some() && suffix_required_bass_min[0].is_none() {
+        return Ok(Vec::new());
+    }
 
     let mut non_omissible_pitches = target;
     for tone in formula.tones() {
@@ -130,6 +135,7 @@ pub fn voicings_with_tuning(
         suffix_sets: &suffix_sets,
         suffix_min_non_open: &suffix_frets.min_non_open,
         suffix_has_open: &suffix_frets.has_open,
+        suffix_required_bass_min: &suffix_required_bass_min,
         target,
         formula_target,
         non_omissible_pitches,
@@ -215,6 +221,7 @@ struct VoicingSearch<'a> {
     suffix_sets: &'a [PitchSet],
     suffix_min_non_open: &'a [Option<u8>; MAX_STRING_COUNT + 1],
     suffix_has_open: &'a [bool; MAX_STRING_COUNT + 1],
+    suffix_required_bass_min: &'a [Option<i16>; MAX_STRING_COUNT + 1],
     target: PitchSet,
     formula_target: PitchSet,
     non_omissible_pitches: PitchSet,
@@ -453,6 +460,34 @@ fn suffix_fret_stats(per_string: &[Vec<Option<u8>>]) -> SuffixFretStats {
     }
 }
 
+fn suffix_required_bass_min_pitches(
+    per_string: &[Vec<Option<u8>>],
+    tuning: GuitarTuning,
+    required_bass: Option<PitchClass>,
+) -> [Option<i16>; MAX_STRING_COUNT + 1] {
+    let mut suffix = [None::<i16>; MAX_STRING_COUNT + 1];
+    let Some(required_bass) = required_bass else {
+        return suffix;
+    };
+
+    for string in (0..per_string.len()).rev() {
+        suffix[string] = suffix[string + 1];
+        for fret in &per_string[string] {
+            let Some(fret) = fret else {
+                continue;
+            };
+            if tuning.pitch_at(string, *fret) != required_bass {
+                continue;
+            }
+            let absolute_pitch = tuning.absolute_pitch(string, *fret);
+            suffix[string] =
+                Some(suffix[string].map_or(absolute_pitch, |current| current.min(absolute_pitch)));
+        }
+    }
+
+    suffix
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct PartialVoicingState {
     pitch_set: PitchSet,
@@ -468,6 +503,7 @@ struct PartialVoicingState {
     internal_mutes: u32,
     trailing_mutes_after_active: u8,
     first_played: Option<(usize, u8)>,
+    lowest_pitch: Option<(i16, PitchClass)>,
 }
 
 impl Default for PartialVoicingState {
@@ -486,6 +522,7 @@ impl Default for PartialVoicingState {
             internal_mutes: 0,
             trailing_mutes_after_active: 0,
             first_played: None,
+            lowest_pitch: None,
         }
     }
 }
@@ -508,9 +545,16 @@ impl PartialVoicingState {
         }
 
         self.active_count += 1;
+        let absolute_pitch = search.tuning.absolute_pitch(string, fret);
         let pitch = search.tuning.pitch_at(string, fret);
         self.pitch_set.insert(pitch);
         self.pitch_counts[usize::from(pitch.value())] += 1;
+        if self
+            .lowest_pitch
+            .is_none_or(|(current, _)| absolute_pitch < current)
+        {
+            self.lowest_pitch = Some((absolute_pitch, pitch));
+        }
 
         if fret == 0 {
             self.has_open = true;
@@ -546,6 +590,15 @@ fn partial_voicing_can_complete(
     state: &PartialVoicingState,
 ) -> bool {
     if !state.span_valid(search.options.max_span) {
+        return false;
+    }
+
+    if let (Some(required_bass), Some((lowest_pitch, lowest_pitch_class))) =
+        (search.bass_rule.required(), state.lowest_pitch)
+        && lowest_pitch_class != required_bass
+        && search.suffix_required_bass_min[next_string]
+            .is_none_or(|bass_pitch| bass_pitch >= lowest_pitch)
+    {
         return false;
     }
 
@@ -937,14 +990,14 @@ fn voicing_notes(
 }
 
 fn voicing_note_name(pitch: PitchClass, search: &VoicingSearch<'_>) -> NoteName {
-    search
-        .formula
-        .tone_for_pitch(pitch)
-        .map(|tone| tone.note)
-        .or_else(|| {
-            search
-                .bass_spelling
-                .filter(|bass| bass.pitch_class() == pitch)
-        })
-        .unwrap_or_else(|| NoteName::simple_for_pitch(pitch, false))
+    if let Some(tone) = search.formula.tone_for_pitch(pitch) {
+        return tone.note;
+    }
+    if let Some(bass) = search
+        .bass_spelling
+        .filter(|bass| bass.pitch_class() == pitch)
+    {
+        return bass;
+    }
+    unreachable!("generated voicing pitch must be a formula tone or explicit bass")
 }
