@@ -1423,11 +1423,8 @@ fn open_bass_grip_bonus(
 
     for (idx, fret) in frets.iter().take(string_count).enumerate() {
         match fret {
-            Some(0) => {
-                if first_fretted.is_some() {
-                    return 0;
-                }
-            }
+            Some(0) if first_fretted.is_some() => return 0,
+            Some(0) => {}
             Some(value) => {
                 first_fretted.get_or_insert(idx);
                 last_fretted = Some(idx);
