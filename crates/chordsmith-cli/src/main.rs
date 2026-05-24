@@ -3,7 +3,7 @@ use std::{fmt, io};
 
 use chordsmith_core::{
     AnalysisClass, ChordsmithError, ChordsmithErrorKind, DEFAULT_LIMIT, DEFAULT_MAX_FRET,
-    DEFAULT_MAX_SPAN, DEFAULT_MIN_FRET, GuitarTuning, IdentifyResult, Instrument,
+    DEFAULT_MAX_SPAN, DEFAULT_MIN_FRET, GuitarTuning, IdentifyResult, Instrument, MAX_LIMIT,
     MAX_STANDARD_FRET, VoicingMode, VoicingOptions, analyze_symbol, identify_with_tuning,
     voicings_with_tuning,
 };
@@ -233,6 +233,11 @@ fn cmd_voicings(matches: &ArgMatches) -> Result<(), CliError> {
     let max_fret = optional_u8(matches, "max_fret", default_max_fret)?;
     let max_span = optional_u8(matches, "max_span", DEFAULT_MAX_SPAN)?;
     let limit = optional_usize(matches, "limit", DEFAULT_LIMIT)?;
+    if limit > MAX_LIMIT {
+        return Err(CliError::usage(format!(
+            "invalid limit '{limit}': curated voicing limit is 0..={MAX_LIMIT}; use --all for exhaustive output"
+        )));
+    }
     let options = VoicingOptions {
         min_fret,
         max_fret,

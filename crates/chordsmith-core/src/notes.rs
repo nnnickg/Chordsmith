@@ -682,19 +682,16 @@ fn parse_compact_tuning(
         if next.len() == rest.len() {
             return Err(ChordsmithError::new(format!("invalid tuning '{input}'")));
         }
+        let (octave, after_octave) = parse_optional_octave(next)?;
         if count < MAX_STRING_COUNT {
             notes[count] = note;
-            let (octave, after_octave) = parse_optional_octave(next)?;
             if let Some(octave) = octave {
                 open_pitches[count] = absolute_note_pitch(note, octave);
                 octave_count += 1;
             }
-            count += 1;
-            rest = after_octave;
-        } else {
-            count += 1;
-            rest = next;
         }
+        count += 1;
+        rest = after_octave;
     }
 
     validate_string_count(count, expected, "tuning notes")?;

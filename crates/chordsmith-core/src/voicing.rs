@@ -2,7 +2,9 @@ use serde::Serialize;
 
 use crate::formula::ChordFormula;
 use crate::identify::inferred_omissions;
-use crate::notes::{Fingering, GuitarTuning, NoteName, PitchClass, PitchSet, STANDARD_TUNING};
+use crate::notes::{
+    Fingering, GuitarTuning, Instrument, NoteName, PitchClass, PitchSet, STANDARD_TUNING,
+};
 use crate::scoring::{rank_voicing_candidates, voicing_score};
 use crate::symbol::ChordSymbol;
 use crate::{
@@ -130,12 +132,24 @@ pub fn voicings_with_tuning(
     let out = match options.mode {
         VoicingMode::All => {
             let mut collector = AllVoicingCollector::new(MAX_ALL_VOICINGS);
-            enumerate_voicings(&search, 0, &mut frets, &mut collector);
+            enumerate_voicings(
+                &search,
+                0,
+                &mut frets,
+                PartialVoicingState::default(),
+                &mut collector,
+            );
             collector.finish()?
         }
         VoicingMode::Curated { limit } => {
             let mut collector = TopVoicingCollector::new(limit);
-            enumerate_voicings(&search, 0, &mut frets, &mut collector);
+            enumerate_voicings(
+                &search,
+                0,
+                &mut frets,
+                PartialVoicingState::default(),
+                &mut collector,
+            );
             collector.finish()
         }
     };
@@ -210,6 +224,7 @@ fn enumerate_voicings(
     search: &VoicingSearch<'_>,
     string_idx: usize,
     frets: &mut [Option<u8>; MAX_STRING_COUNT],
+    state: PartialVoicingState,
     out: &mut impl VoicingCollector,
 ) {
     if string_idx == search.string_count() {
@@ -225,13 +240,16 @@ fn enumerate_voicings(
                 return;
             }
             frets[string_idx] = *choice;
-            if !partial_voicing_can_complete(search, string_idx + 1, frets) {
+            let next_state = state.advance(search, string_idx, *choice);
+            if !partial_voicing_can_complete(search, string_idx + 1, &next_state) {
                 continue;
             }
-            if partial_voicing_score_floor(search, string_idx + 1, frets) > out.score_ceiling() {
+            if partial_voicing_score_floor(search, string_idx + 1, &next_state)
+                > out.score_ceiling()
+            {
                 continue;
             }
-            enumerate_voicings(search, string_idx + 1, frets, out);
+            enumerate_voicings(search, string_idx + 1, frets, next_state, out);
         }
     }
 }
@@ -425,16 +443,103 @@ fn suffix_fret_stats(per_string: &[Vec<Option<u8>>]) -> SuffixFretStats {
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct PartialVoicingState {
+    pitch_set: PitchSet,
+    active_count: usize,
+    has_open: bool,
+    pitch_counts: [u8; 12],
+    non_open_count: usize,
+    non_open_sum: u16,
+    min_non_open: Option<u8>,
+    max_non_open: Option<u8>,
+    previous_fretted: Option<u8>,
+    adjacent_jump_cost: u32,
+    internal_mutes: u32,
+    trailing_mutes_after_active: u8,
+    first_played: Option<(usize, u8)>,
+}
+
+impl Default for PartialVoicingState {
+    fn default() -> Self {
+        Self {
+            pitch_set: PitchSet::empty(),
+            active_count: 0,
+            has_open: false,
+            pitch_counts: [0; 12],
+            non_open_count: 0,
+            non_open_sum: 0,
+            min_non_open: None,
+            max_non_open: None,
+            previous_fretted: None,
+            adjacent_jump_cost: 0,
+            internal_mutes: 0,
+            trailing_mutes_after_active: 0,
+            first_played: None,
+        }
+    }
+}
+
+impl PartialVoicingState {
+    fn advance(mut self, search: &VoicingSearch<'_>, string: usize, choice: Option<u8>) -> Self {
+        let Some(fret) = choice else {
+            if self.active_count > 0 {
+                self.trailing_mutes_after_active =
+                    self.trailing_mutes_after_active.saturating_add(1);
+            }
+            return self;
+        };
+
+        if self.active_count == 0 {
+            self.first_played = Some((string, fret));
+        } else {
+            self.internal_mutes += u32::from(self.trailing_mutes_after_active);
+            self.trailing_mutes_after_active = 0;
+        }
+
+        self.active_count += 1;
+        let pitch = search.tuning.pitch_at(string, fret);
+        self.pitch_set.insert(pitch);
+        self.pitch_counts[usize::from(pitch.value())] += 1;
+
+        if fret == 0 {
+            self.has_open = true;
+            return self;
+        }
+
+        self.non_open_count += 1;
+        self.non_open_sum += u16::from(fret);
+        self.min_non_open = Some(self.min_non_open.map_or(fret, |current| current.min(fret)));
+        self.max_non_open = Some(self.max_non_open.map_or(fret, |current| current.max(fret)));
+        if let Some(previous) = self.previous_fretted {
+            let jump = fret.abs_diff(previous);
+            if jump > 2 {
+                let excess = u32::from(jump - 2);
+                self.adjacent_jump_cost += excess * excess * 4;
+            }
+        }
+        self.previous_fretted = Some(fret);
+        self
+    }
+
+    fn span_valid(self, max_span: u8) -> bool {
+        match (self.min_non_open, self.max_non_open) {
+            (Some(min), Some(max)) => max.saturating_sub(min) <= max_span,
+            _ => true,
+        }
+    }
+}
+
 fn partial_voicing_can_complete(
     search: &VoicingSearch<'_>,
     next_string: usize,
-    frets: &[Option<u8>; MAX_STRING_COUNT],
+    state: &PartialVoicingState,
 ) -> bool {
-    if !partial_span_valid(frets, next_string, search.options.max_span) {
+    if !state.span_valid(search.options.max_span) {
         return false;
     }
 
-    let current = partial_pitch_set(frets, next_string, search.tuning);
+    let current = state.pitch_set;
     let available = current.union(search.suffix_sets[next_string]);
     let missing_required = search.target.difference(available);
     if missing_required
@@ -451,81 +556,47 @@ fn partial_voicing_can_complete(
 fn partial_voicing_score_floor(
     search: &VoicingSearch<'_>,
     next_string: usize,
-    frets: &[Option<u8>; MAX_STRING_COUNT],
+    state: &PartialVoicingState,
 ) -> u32 {
-    let ceiling = partial_base_score_floor(search, next_string, frets);
-    ceiling.saturating_sub(max_possible_bonus(search, next_string, frets))
+    let ceiling = partial_base_score_floor(search, next_string, state);
+    ceiling.saturating_sub(max_possible_bonus(search, next_string, state))
 }
 
 fn partial_base_score_floor(
     search: &VoicingSearch<'_>,
     next_string: usize,
-    frets: &[Option<u8>; MAX_STRING_COUNT],
+    state: &PartialVoicingState,
 ) -> u32 {
-    let mut non_open = [0u8; MAX_STRING_COUNT];
-    let mut non_open_count = 0;
-    let mut has_open = false;
-    let mut active_count = 0usize;
-    let mut pitch_counts = [0u8; 12];
-    let mut previous_fretted = None::<u8>;
-    let mut adjacent_jump_cost = 0u32;
-
-    for (string, fret) in frets.iter().take(next_string).enumerate() {
-        let Some(fret) = fret else {
-            continue;
-        };
-
-        active_count += 1;
-        let pitch = search.tuning.pitch_at(string, *fret);
-        pitch_counts[usize::from(pitch.value())] += 1;
-
-        if *fret == 0 {
-            has_open = true;
-        } else {
-            non_open[non_open_count] = *fret;
-            non_open_count += 1;
-            if let Some(previous) = previous_fretted {
-                let jump = fret.abs_diff(previous);
-                if jump > 2 {
-                    let excess = u32::from(jump - 2);
-                    adjacent_jump_cost += excess * excess * 4;
-                }
-            }
-            previous_fretted = Some(*fret);
-        }
-    }
-
-    let current_non_open = &non_open[..non_open_count];
-    let position = partial_position_cost_floor(search, next_string, current_non_open, has_open);
-    let relative = partial_relative_fret_cost_floor(current_non_open);
-    let span = partial_fret_span_cost_floor(current_non_open);
-    let duplicates = pitch_counts
+    let position = partial_position_cost_floor(search, next_string, state);
+    let relative = partial_relative_fret_cost_floor(state);
+    let span = partial_fret_span_cost_floor(state);
+    let duplicates = state
+        .pitch_counts
         .iter()
         .map(|count| count.saturating_sub(2))
         .map(|excess| u32::from(excess) * 8)
         .sum::<u32>();
-    let internal_mutes = partial_internal_mutes(frets, next_string) * 4;
+    let internal_mutes = state.internal_mutes * 4;
     position
         + relative
         + span
         + duplicates
-        + adjacent_jump_cost
+        + state.adjacent_jump_cost
         + internal_mutes
-        + partial_active_string_cost_floor(active_count, next_string, search.string_count())
+        + partial_active_string_cost_floor(state.active_count, next_string, search.string_count())
 }
 
 fn partial_position_cost_floor(
     search: &VoicingSearch<'_>,
     next_string: usize,
-    current_non_open: &[u8],
-    has_open: bool,
+    state: &PartialVoicingState,
 ) -> u32 {
-    let current_min = current_non_open.iter().copied().min();
+    let current_min = state.min_non_open;
     let future_min = min_future_non_open_fret(search, next_string);
     let Some(min) = current_min.into_iter().chain(future_min).min() else {
         return 0;
     };
-    let multiplier = if has_open || suffix_can_play_open(search, next_string) {
+    let multiplier = if state.has_open || suffix_can_play_open(search, next_string) {
         1
     } else {
         2
@@ -533,21 +604,18 @@ fn partial_position_cost_floor(
     u32::from(min) * multiplier
 }
 
-fn partial_relative_fret_cost_floor(non_open: &[u8]) -> u32 {
-    let Some(min) = non_open.iter().min() else {
+fn partial_relative_fret_cost_floor(state: &PartialVoicingState) -> u32 {
+    let Some(min) = state.min_non_open else {
         return 0;
     };
-    non_open
-        .iter()
-        .map(|fret| u32::from(fret.saturating_sub(*min)))
-        .sum()
+    u32::from(state.non_open_sum) - u32::from(min) * state.non_open_count as u32
 }
 
-fn partial_fret_span_cost_floor(non_open: &[u8]) -> u32 {
-    let (Some(min), Some(max)) = (non_open.iter().min(), non_open.iter().max()) else {
+fn partial_fret_span_cost_floor(state: &PartialVoicingState) -> u32 {
+    let (Some(min), Some(max)) = (state.min_non_open, state.max_non_open) else {
         return 0;
     };
-    let span = u32::from(max.saturating_sub(*min));
+    let span = u32::from(max.saturating_sub(min));
     span * span
 }
 
@@ -586,115 +654,122 @@ fn suffix_can_play_open(search: &VoicingSearch<'_>, next_string: usize) -> bool 
     search.suffix_has_open[next_string]
 }
 
-fn partial_internal_mutes(frets: &[Option<u8>; MAX_STRING_COUNT], next_string: usize) -> u32 {
-    let first = frets.iter().take(next_string).position(Option::is_some);
-    let last = frets.iter().take(next_string).rposition(Option::is_some);
-    let (Some(first), Some(last)) = (first, last) else {
-        return 0;
-    };
-    u32::try_from(
-        frets
-            .iter()
-            .take(last + 1)
-            .skip(first)
-            .filter(|fret| fret.is_none())
-            .count(),
-    )
-    .unwrap_or(0)
-}
-
 fn max_possible_bonus(
     search: &VoicingSearch<'_>,
     next_string: usize,
-    frets: &[Option<u8>; MAX_STRING_COUNT],
+    state: &PartialVoicingState,
 ) -> u32 {
-    let current_has_open = frets
-        .iter()
-        .take(next_string)
-        .flatten()
-        .any(|fret| *fret == 0);
-    let mut current_min = None::<u8>;
-    let mut current_max = None::<u8>;
-    for fret in frets.iter().take(next_string).flatten().copied() {
-        if fret == 0 {
-            continue;
-        }
-        current_min = Some(current_min.map_or(fret, |value| value.min(fret)));
-        current_max = Some(current_max.map_or(fret, |value| value.max(fret)));
-    }
-    let internal_mutes = partial_internal_mutes(frets, next_string);
-    let can_play_open = current_has_open || suffix_can_play_open(search, next_string);
-    let first_played = frets
-        .iter()
-        .take(next_string)
-        .enumerate()
-        .find_map(|(string, fret)| fret.map(|fret| (string, fret)));
+    let can_play_open = state.has_open || suffix_can_play_open(search, next_string);
 
     let mut bonus = 0u32;
-    if can_play_open && current_max.is_none_or(|max| max <= 3) {
+    // open_position_bonus upper bound.
+    if can_play_open && state.max_non_open.is_none_or(|max| max <= 3) {
         bonus += 22;
     }
-    if first_played.is_none_or(|(_, fret)| fret == 0) {
+    // open_root_bass_bonus upper bound.
+    if state.first_played.is_none_or(|(_, fret)| fret == 0) {
         bonus += 18;
     }
-    if first_played.is_none_or(|(_, fret)| fret == 0) {
+    // open_bass_grip_bonus upper bound.
+    if state.first_played.is_none_or(|(_, fret)| fret == 0) {
         bonus += 20;
     }
-    if !current_has_open && internal_mutes == 0 {
+    // closed_shape_bonus upper bound.
+    if !state.has_open && state.internal_mutes == 0 {
         bonus += 30;
     }
-    if !current_has_open && internal_mutes == 0 {
+    // barre_grip_bonus upper bound.
+    if !state.has_open && state.internal_mutes == 0 {
         bonus += 12;
     }
-    if !current_has_open
-        && current_min.is_none_or(|min| {
+    // compact_low_grip_bonus upper bound.
+    if !state.has_open
+        && state.min_non_open.is_none_or(|min| {
             min <= 3
                 || min_future_non_open_fret(search, next_string).is_some_and(|future| future <= 3)
         })
     {
         bonus += 8;
     }
-    if !current_has_open && internal_mutes <= 1 {
+    // jazz_shell_bonus upper bound.
+    if !state.has_open && state.internal_mutes <= 1 {
         bonus += 14;
+    }
+    bonus += max_possible_instrument_bonus(search, next_string, state, can_play_open);
+    bonus
+}
+
+fn max_possible_instrument_bonus(
+    search: &VoicingSearch<'_>,
+    next_string: usize,
+    state: &PartialVoicingState,
+    can_play_open: bool,
+) -> u32 {
+    match search.tuning.instrument() {
+        Instrument::Guitar => {
+            max_possible_guitar_instrument_bonus(search, next_string, state, can_play_open)
+        }
+        Instrument::Ukulele => {
+            max_possible_ukulele_instrument_bonus(search, next_string, state, can_play_open)
+        }
+        Instrument::Guitar7 | Instrument::Guitar8 => 0,
+    }
+}
+
+fn max_possible_guitar_instrument_bonus(
+    search: &VoicingSearch<'_>,
+    next_string: usize,
+    state: &PartialVoicingState,
+    can_play_open: bool,
+) -> u32 {
+    if search.string_count() != 6 {
+        return 0;
+    }
+
+    let remaining = search.string_count().saturating_sub(next_string);
+    let max_active = state.active_count + remaining;
+    if !can_play_open {
+        return 0;
+    }
+
+    let mut bonus = 0;
+    if max_active >= 4 && state.max_non_open.is_none_or(|max| max <= 3) {
+        bonus += 8;
+    }
+    if max_active >= 5
+        && state.max_non_open.is_none_or(|max| max <= 5)
+        && formula_has_degree(search.formula, 9)
+        && !formula_has_degree(search.formula, 7)
+    {
+        bonus += 24;
     }
     bonus
 }
 
-fn partial_span_valid(
-    frets: &[Option<u8>; MAX_STRING_COUNT],
+fn max_possible_ukulele_instrument_bonus(
+    search: &VoicingSearch<'_>,
     next_string: usize,
-    max_span: u8,
-) -> bool {
-    let mut min = None::<u8>;
-    let mut max = None::<u8>;
-    for fret in frets.iter().take(next_string).flatten().copied() {
-        if fret == 0 {
-            continue;
-        }
-        min = Some(min.map_or(fret, |current| current.min(fret)));
-        max = Some(max.map_or(fret, |current| current.max(fret)));
+    state: &PartialVoicingState,
+    can_play_open: bool,
+) -> u32 {
+    if search.string_count() != 4 {
+        return 0;
     }
 
-    match (min, max) {
-        (Some(min), Some(max)) => max.saturating_sub(min) <= max_span,
-        _ => true,
+    let remaining = search.string_count().saturating_sub(next_string);
+    let max_active = state.active_count + remaining;
+    if can_play_open
+        && max_active == search.string_count()
+        && state.max_non_open.is_none_or(|max| max <= 4)
+    {
+        12
+    } else {
+        0
     }
 }
 
-fn partial_pitch_set(
-    frets: &[Option<u8>; MAX_STRING_COUNT],
-    next_string: usize,
-    tuning: GuitarTuning,
-) -> PitchSet {
-    let mut set = PitchSet::empty();
-    for (string, fret) in frets.iter().take(next_string).enumerate() {
-        let Some(fret) = fret else {
-            continue;
-        };
-        let pitch = tuning.pitch_at(string, *fret);
-        set.insert(pitch);
-    }
-    set
+fn formula_has_degree(formula: &ChordFormula, degree: u8) -> bool {
+    formula.tones().iter().any(|tone| tone.degree == degree)
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -833,24 +908,26 @@ fn voicing_notes(
     frets: &[Option<u8>; MAX_STRING_COUNT],
     search: &VoicingSearch<'_>,
 ) -> Vec<String> {
-    let mut notes = Vec::new();
+    let mut notes = Vec::with_capacity(search.string_count());
     for (string, fret) in frets.iter().take(search.string_count()).enumerate() {
         let Some(fret) = fret else {
             continue;
         };
         let pitch = search.tuning.pitch_at(string, *fret);
-        let note = search
-            .formula
-            .tone_for_pitch(pitch)
-            .map(|tone| tone.note.to_string())
-            .or_else(|| {
-                search
-                    .bass_spelling
-                    .filter(|bass| bass.pitch_class() == pitch)
-                    .map(|bass| bass.to_string())
-            })
-            .unwrap_or_else(|| NoteName::simple_for_pitch(pitch, false).to_string());
-        notes.push(note);
+        notes.push(voicing_note_name(pitch, search).to_string());
     }
     notes
+}
+
+fn voicing_note_name(pitch: PitchClass, search: &VoicingSearch<'_>) -> NoteName {
+    search
+        .formula
+        .tone_for_pitch(pitch)
+        .map(|tone| tone.note)
+        .or_else(|| {
+            search
+                .bass_spelling
+                .filter(|bass| bass.pitch_class() == pitch)
+        })
+        .unwrap_or_else(|| NoteName::simple_for_pitch(pitch, false))
 }

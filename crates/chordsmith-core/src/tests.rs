@@ -42,10 +42,27 @@ fn identifies_as_primary_or_useful_alias(result: &IdentifyResult, requested: &st
 }
 
 fn symbol_matches_requested(actual: &str, requested: &str) -> bool {
-    actual == requested
+    if actual == requested
         || actual
             .strip_prefix(requested)
             .is_some_and(|rest| rest.starts_with("(no") || rest.starts_with("no"))
+    {
+        return true;
+    }
+
+    let Some((requested_root, requested_bass)) = requested.split_once('/') else {
+        return false;
+    };
+    actual
+        .strip_prefix(requested_root)
+        .and_then(|rest| {
+            if rest.starts_with("(no") || rest.starts_with("no") {
+                rest.rsplit_once('/')
+            } else {
+                None
+            }
+        })
+        .is_some_and(|(_, actual_bass)| actual_bass == requested_bass)
 }
 
 #[test]
@@ -173,6 +190,23 @@ fn supports_extended_range_guitar_tunings() {
 }
 
 #[test]
+fn rejects_unsupported_compact_tuning_count_after_octaves() {
+    let error = Tuning::parse("C4C4C4C4C4C4C4C4C4")
+        .expect_err("nine-string compact tuning should fail by string count");
+    assert!(error.to_string().contains("got 9"), "{error}");
+}
+
+#[test]
+fn rejects_fingering_count_mismatches_for_fixed_tuning() {
+    let error = identify_with_tuning("0000000", STANDARD_TUNING)
+        .expect_err("seven-string fingering should fail for six-string tuning");
+    assert!(
+        error.to_string().contains("expected 6 strings, got 7"),
+        "{error}"
+    );
+}
+
+#[test]
 fn supports_standard_ukulele_tuning_and_reentrant_bass() {
     let uke = Instrument::Ukulele.default_tuning();
     let notes = uke
@@ -242,6 +276,173 @@ fn ranks_common_ukulele_open_shapes_first() {
 }
 
 #[test]
+fn ranks_ukulele_e_major_low_grips_before_high_positions() {
+    let uke = Instrument::Ukulele.default_tuning();
+    let shapes = voicings_with_tuning("E", uke, VoicingOptions::default()).unwrap();
+    let compact = shapes
+        .iter()
+        .map(|shape| shape.compact.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        &compact[..10],
+        [
+            "x442", "4442", "1x02", "1402", "1442", "444x", "4447", "14x2", "x877", "9877",
+        ]
+    );
+}
+
+#[test]
+fn golden_guitar_default_voicings_start_with_musician_grips() {
+    for (symbol, expected) in [
+        ("C", "x32010"),
+        ("G", "320003"),
+        ("D", "xx0232"),
+        ("A7", "x02020"),
+        ("Dadd9", "x54230"),
+        ("C9", "x32330"),
+        ("C7b9", "x32320"),
+    ] {
+        let shapes = voicings(symbol, VoicingOptions::default()).unwrap();
+        let first = shapes.first().expect("top guitar voicing");
+        assert_eq!(first.compact, expected, "{symbol}");
+    }
+}
+
+#[test]
+fn golden_ukulele_default_voicings_start_with_musician_grips() {
+    let uke = Instrument::Ukulele.default_tuning();
+    for (symbol, expected) in [
+        ("C", "0003"),
+        ("G", "0232"),
+        ("A", "2100"),
+        ("E", "x442"),
+        ("F", "2010"),
+        ("Em", "0432"),
+    ] {
+        let shapes = voicings_with_tuning(symbol, uke, VoicingOptions::default()).unwrap();
+        let first = shapes.first().expect("top ukulele voicing");
+        assert_eq!(first.compact, expected, "{symbol}");
+    }
+}
+
+#[test]
+fn golden_extended_dominant_shapes_identify_as_requested_family() {
+    assert_eq!(primary("878788"), "C9");
+    assert_eq!(primary("x32323"), "C7b9");
+}
+
+#[test]
+fn golden_ukulele_context_voicings_remain_useful_aliases() {
+    let uke = Instrument::Ukulele.default_tuning();
+
+    let rootless_c13 = identify_with_tuning("2201", uke).unwrap();
+    assert_eq!(
+        rootless_c13.primary.expect("rootless C13 primary").symbol,
+        "E7sus4b5"
+    );
+    assert!(rootless_c13.aliases.iter().any(|analysis| {
+        analysis.symbol == "C13no1no5" && analysis.class == AnalysisClass::UsefulAlias
+    }));
+
+    let c_over_g = identify_with_tuning("5787", uke).unwrap();
+    assert_eq!(c_over_g.primary.expect("C/G primary").symbol, "C");
+    assert!(c_over_g.aliases.iter().any(|analysis| {
+        analysis.symbol == "C/G" && analysis.class == AnalysisClass::UsefulAlias
+    }));
+
+    let c_over_d = identify_with_tuning("x203", uke).unwrap();
+    assert_eq!(
+        c_over_d.primary.expect("C/D omitted-fifth primary").symbol,
+        "Cno5/D"
+    );
+
+    let c_over_d_shapes = voicings_with_tuning("C/D", uke, VoicingOptions::default()).unwrap();
+    assert!(c_over_d_shapes.iter().all(|shape| {
+        !shape
+            .omissions
+            .iter()
+            .any(|omission| omission.as_str() == "3")
+    }));
+
+    let rootless_g9 = identify_with_tuning("2x12", uke).unwrap();
+    assert!(rootless_g9.aliases.iter().any(|analysis| {
+        analysis.symbol == "G9no1no5" && analysis.class == AnalysisClass::UsefulAlias
+    }));
+
+    let half_diminished = identify_with_tuning("2000", uke).unwrap();
+    assert_eq!(
+        half_diminished
+            .primary
+            .expect("rootless half-diminished primary")
+            .symbol,
+        "Am"
+    );
+    assert!(half_diminished.aliases.iter().any(|analysis| {
+        analysis.symbol == "F#m7b5no1" && analysis.class == AnalysisClass::UsefulAlias
+    }));
+
+    let altered = identify_with_tuning("3344", uke).unwrap();
+    assert!(altered.aliases.iter().any(|analysis| {
+        analysis.symbol == "Caltno1no3" && analysis.class == AnalysisClass::UsefulAlias
+    }));
+
+    let diminished = identify_with_tuning("3101", uke).unwrap();
+    assert!(diminished.aliases.iter().any(|analysis| {
+        analysis.symbol == "Gdim7no1" && analysis.class == AnalysisClass::UsefulAlias
+    }));
+}
+
+#[test]
+fn golden_top_five_voicings_round_trip_for_guitar_and_ukulele_corpus() {
+    let guitar = Instrument::Guitar.default_tuning();
+    let guitar7 = Instrument::Guitar7.default_tuning();
+    let guitar8 = Instrument::Guitar8.default_tuning();
+    let uke = Instrument::Ukulele.default_tuning();
+    let guitar_corpus = &[
+        "C", "G", "Dadd9", "A7", "C9", "C13", "G13", "C7b9", "C7#9", "C7#11", "Calt", "Bm7b5",
+        "Gdim7",
+    ][..];
+    for (instrument, tuning, corpus) in [
+        ("guitar", guitar, guitar_corpus),
+        ("guitar7", guitar7, guitar_corpus),
+        ("guitar8", guitar8, guitar_corpus),
+        (
+            "ukulele",
+            uke,
+            &[
+                "C", "G", "E", "Em", "Cadd9", "Dadd9", "C/G", "C/E", "F/A", "C/D", "C/Db", "C/Eb",
+                "C/Ab", "F#m7b5", "C9", "G9", "C13", "C7#9", "C7#11", "Calt", "Gdim7",
+            ][..],
+        ),
+    ] {
+        for symbol in corpus {
+            let requested = analyze_symbol(symbol).unwrap().0.name();
+            let shapes = voicings_with_tuning(
+                symbol,
+                tuning,
+                VoicingOptions {
+                    mode: VoicingMode::Curated { limit: 5 },
+                    ..VoicingOptions::default()
+                },
+            )
+            .unwrap();
+
+            for shape in shapes {
+                let result = identify_with_tuning(&shape.compact, tuning).unwrap();
+                assert!(
+                    identifies_as_primary_or_useful_alias(&result, &requested),
+                    "{instrument} {symbol} requested {requested}, generated {}, primary {:?}, aliases {:?}",
+                    shape.compact,
+                    result.primary,
+                    result.aliases
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn spells_flat_seventh_bass_from_chord_context() {
     let result = identify("x12010").unwrap();
     assert_eq!(result.primary.expect("primary analysis").symbol, "C7/Bb");
@@ -251,6 +452,18 @@ fn spells_flat_seventh_bass_from_chord_context() {
         .map(|note| note.note.to_string())
         .collect::<Vec<_>>();
     assert_eq!(notes, ["Bb", "E", "G", "C", "E"]);
+}
+
+#[test]
+fn respells_played_notes_from_primary_flat_key_context() {
+    let result = identify("x46664").unwrap();
+    assert_eq!(result.primary.expect("primary analysis").symbol, "Db");
+    let notes = result
+        .notes
+        .iter()
+        .map(|note| note.note.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(notes, ["Db", "Ab", "Db", "F", "Ab"]);
 }
 
 #[test]
@@ -801,11 +1014,7 @@ fn identifies_non_chord_slash_bass_voicings_with_omissions() {
 
 #[test]
 fn generated_non_chord_slash_voicings_identify_back_as_primary() {
-    for (chord, expected_shape) in [
-        ("C/Eb", "x65550"),
-        ("C/Ab", "435553"),
-        ("C/Db", "9-10-10-9-8-8"),
-    ] {
+    for (chord, expected_shape) in [("C/Eb", "x65550"), ("C/Ab", "435553"), ("C/Db", "x45550")] {
         let shapes = voicings(
             chord,
             VoicingOptions {
@@ -1205,12 +1414,19 @@ fn infers_rootless_and_no_third_omitted_analyses() {
 #[test]
 fn classifies_theoretical_aliases_away_from_default_display() {
     let result = identify("x12010").unwrap();
-    let dim_alias = result
+    let edge_spelling_alias = result
         .aliases
         .iter()
-        .find(|analysis| analysis.symbol == "Bbdim9no3")
-        .expect("theoretical diminished alias");
-    assert_eq!(dim_alias.class, AnalysisClass::TheoreticalAlias);
+        .find(|analysis| analysis.symbol == "B#7/A#")
+        .expect("theoretical edge-spelling alias");
+    assert_eq!(edge_spelling_alias.class, AnalysisClass::TheoreticalAlias);
+
+    let useful_alias = result
+        .aliases
+        .iter()
+        .find(|analysis| analysis.symbol == "C/Bb")
+        .expect("useful slash alias");
+    assert_eq!(useful_alias.class, AnalysisClass::UsefulAlias);
 }
 
 #[test]

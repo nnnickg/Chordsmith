@@ -14,9 +14,12 @@ chordsmith voicings Em
 
 ## Status
 
-Version 1.0.0. The engine separates chord theory from CLI formatting, uses
+Version 1.1.0. The engine separates chord theory from CLI formatting, uses
 deterministic ranking, and treats chord names as analyses over pitch-class sets
 rather than as chart entries.
+
+Distribution is through local builds and GitHub release artifacts; workspace
+crates are not published to crates.io.
 
 ## Quick Start
 
@@ -88,6 +91,8 @@ Identification uses a static generated grammar of common tertian, suspended,
 added-tone, altered-dominant, diminished, half-diminished, slash, and inferred
 omission analyses. It is intentionally not an unbounded symbolic theorem prover
 for arbitrary exotic chord naming systems.
+
+Engine invariants are documented in [docs/engine.md](docs/engine.md).
 
 ## Development
 

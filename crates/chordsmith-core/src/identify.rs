@@ -101,7 +101,16 @@ pub fn identify_fingering_with_tuning(
     let store = candidate_store();
     let mut analyses = Vec::new();
     for candidate in store.exact_matches(played.set) {
-        if played.set == candidate.formula_set {
+        analyses.push(build_analysis(
+            candidate.root,
+            &candidate.spec,
+            &candidate.formula,
+            bass,
+            Vec::new(),
+            false,
+            show_chord_tone_bass,
+        ));
+        if !show_chord_tone_bass && bass != candidate.root.pitch_class() {
             analyses.push(build_analysis(
                 candidate.root,
                 &candidate.spec,
@@ -109,9 +118,8 @@ pub fn identify_fingering_with_tuning(
                 bass,
                 Vec::new(),
                 false,
-                show_chord_tone_bass,
+                true,
             ));
-            continue;
         }
     }
 
@@ -215,6 +223,7 @@ struct CandidateRecord {
 struct CandidateStore {
     records: Vec<CandidateRecord>,
     exact: [Vec<usize>; PITCH_SET_KEY_COUNT],
+    max_formula_pitches: usize,
 }
 
 impl CandidateStore {
@@ -225,7 +234,7 @@ impl CandidateStore {
     }
 
     fn for_each_superset_match(&self, set: PitchSet, mut handle: impl FnMut(&CandidateRecord)) {
-        for key in pitch_superset_keys(set) {
+        for key in pitch_superset_keys(set, self.max_formula_pitches) {
             for idx in &self.exact[usize::from(key.bits)] {
                 handle(&self.records[*idx]);
             }
@@ -241,28 +250,118 @@ fn candidate_store() -> &'static CandidateStore {
 fn build_candidate_store() -> CandidateStore {
     let records = build_candidate_records();
     let mut exact = array::from_fn(|_| Vec::new());
+    let max_formula_pitches = records
+        .iter()
+        .map(|record| record.formula_set.len())
+        .max()
+        .unwrap_or(0);
 
     for (idx, record) in records.iter().enumerate() {
         exact[usize::from(record.formula_set.bits)].push(idx);
     }
 
-    CandidateStore { records, exact }
+    CandidateStore {
+        records,
+        exact,
+        max_formula_pitches,
+    }
 }
 
-fn pitch_superset_keys(set: PitchSet) -> impl Iterator<Item = PitchSet> {
-    let variable_bits = !set.bits & 0x0fff;
-    let mut next = Some(variable_bits);
-    std::iter::from_fn(move || {
-        let current = next?;
-        next = if current == 0 {
-            None
-        } else {
-            Some((current - 1) & variable_bits)
-        };
-        Some(PitchSet {
-            bits: set.bits | current,
-        })
-    })
+fn pitch_superset_keys(set: PitchSet, max_pitches: usize) -> BoundedSupersetKeys {
+    BoundedSupersetKeys::new(set, max_pitches)
+}
+
+struct BoundedSupersetKeys {
+    base_bits: u16,
+    positions: [u8; 12],
+    position_count: usize,
+    max_extra: usize,
+    size: usize,
+    combination: [usize; 12],
+    started_size: bool,
+    done: bool,
+}
+
+impl BoundedSupersetKeys {
+    fn new(set: PitchSet, max_pitches: usize) -> Self {
+        let mut positions = [0u8; 12];
+        let mut position_count = 0;
+        let variable_bits = !set.bits & 0x0fff;
+        for bit in 0..12 {
+            if variable_bits & (1u16 << bit) != 0 {
+                positions[position_count] = bit;
+                position_count += 1;
+            }
+        }
+
+        let base_count = set.len();
+        let done = base_count > max_pitches;
+        Self {
+            base_bits: set.bits,
+            positions,
+            position_count,
+            max_extra: max_pitches.saturating_sub(base_count).min(position_count),
+            size: 0,
+            combination: [0; 12],
+            started_size: false,
+            done,
+        }
+    }
+
+    fn current_key(&self) -> PitchSet {
+        let mut bits = self.base_bits;
+        for idx in self.combination.iter().take(self.size) {
+            bits |= 1u16 << self.positions[*idx];
+        }
+        PitchSet { bits }
+    }
+
+    fn start_size(&mut self) {
+        for idx in 0..self.size {
+            self.combination[idx] = idx;
+        }
+        self.started_size = true;
+    }
+
+    fn advance(&mut self) {
+        if self.size == 0 {
+            self.size += 1;
+            self.started_size = false;
+            self.done = self.size > self.max_extra;
+            return;
+        }
+
+        for idx in (0..self.size).rev() {
+            let limit = self.position_count - self.size + idx;
+            if self.combination[idx] < limit {
+                self.combination[idx] += 1;
+                for next in idx + 1..self.size {
+                    self.combination[next] = self.combination[next - 1] + 1;
+                }
+                return;
+            }
+        }
+
+        self.size += 1;
+        self.started_size = false;
+        self.done = self.size > self.max_extra;
+    }
+}
+
+impl Iterator for BoundedSupersetKeys {
+    type Item = PitchSet;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        if !self.started_size {
+            self.start_size();
+        }
+        let key = self.current_key();
+        self.advance();
+        Some(key)
+    }
 }
 
 fn build_candidate_records() -> Vec<CandidateRecord> {
@@ -350,7 +449,9 @@ fn respell_played_notes(
         .iter()
         .map(|played| {
             let mut respelled = played.clone();
-            if let Some(note) = spellings[usize::from(played.pitch_class)] {
+            if let Some(note) = spellings[usize::from(played.pitch_class)]
+                && note.accidental.unsigned_abs() <= 1
+            {
                 respelled.note = note;
             }
             respelled
@@ -568,7 +669,7 @@ fn push_unique_omission(values: &mut Vec<u8>, value: u8) {
 fn can_infer_omission(tone: &ChordTone, formula: &ChordFormula) -> bool {
     match tone.degree {
         1 => formula.tones.len() >= 4,
-        3 => formula.tones.len() >= 3,
+        3 => formula.tones.len() >= 4 && formula_has_intervals(formula, &["b7"]),
         5 => tone.interval.is_natural_fifth(),
         _ => false,
     }
@@ -613,8 +714,9 @@ fn build_analysis(
 
     let mut score = analysis_score(root, spec, formula, bass, omitted, show_chord_tone_bass);
     for omission in &omissions {
-        score += omission_score(omission);
+        score += omission_score(omission, formula);
     }
+    score = score.saturating_sub(contextual_omission_adjustment(formula, &omissions));
 
     BuiltAnalysis {
         analysis: ChordAnalysis {
@@ -659,9 +761,10 @@ fn build_slash_bass_analysis(
         (_, false, _) => analysis
             .analysis
             .score
-            .saturating_sub(400)
+            .saturating_sub(exact_slash_bass_offset(spec))
             .saturating_add(exact_slash_bass_penalty(interval)),
         (2, true, true) => analysis.analysis.score.saturating_sub(520),
+        (1 | 3 | 6 | 8, true, true) => analysis.analysis.score.saturating_sub(400),
         (5, true, _) => analysis.analysis.score.saturating_add(220),
         _ => analysis.analysis.score.saturating_add(260),
     };
@@ -696,6 +799,21 @@ fn exact_slash_bass_penalty(interval: u8) -> u32 {
     }
 }
 
+fn exact_slash_bass_offset(spec: &ChordSpec) -> u32 {
+    if matches!(spec.quality, Quality::Major | Quality::Minor)
+        && spec.seventh == Seventh::None
+        && spec.extension.is_none()
+        && !spec.sixth
+        && !spec.alt
+        && spec.adds.is_empty()
+        && spec.alterations.is_empty()
+    {
+        400
+    } else {
+        340
+    }
+}
+
 fn slash_bass_interval(root: NoteName, bass: PitchClass) -> u8 {
     (bass.value() + 12 - root.pitch_class().value()) % 12
 }
@@ -705,16 +823,16 @@ fn classify_alias(analysis: &ChordAnalysis, primary_score: u32) -> AnalysisClass
         return AnalysisClass::TheoreticalAlias;
     }
 
+    if is_edge_root_spelling(&analysis.root) {
+        return AnalysisClass::TheoreticalAlias;
+    }
+
     if analysis.confidence == Confidence::Omitted {
-        return if analysis.omissions == ["5"] {
+        return if is_useful_omitted_alias(analysis) {
             AnalysisClass::UsefulAlias
         } else {
             AnalysisClass::TheoreticalAlias
         };
-    }
-
-    if is_edge_root_spelling(&analysis.root) {
-        return AnalysisClass::TheoreticalAlias;
     }
 
     if analysis.intervals.len() <= 4
@@ -736,15 +854,46 @@ fn is_edge_root_spelling(root: &str) -> bool {
 fn is_stable_alias_interval(interval: &str) -> bool {
     matches!(
         interval,
-        "1" | "2" | "b3" | "3" | "4" | "b5" | "5" | "#5" | "6" | "bb7" | "b7" | "7"
+        "1" | "2"
+            | "b3"
+            | "3"
+            | "4"
+            | "b5"
+            | "5"
+            | "#5"
+            | "6"
+            | "bb7"
+            | "b7"
+            | "7"
+            | "9"
+            | "11"
+            | "13"
     )
 }
 
-fn omission_score(omission: &str) -> u32 {
+fn omission_score(omission: &str, formula: &ChordFormula) -> u32 {
     match omission {
-        "1" => 500,
-        "3" => 500,
-        "5" => 80,
+        "1" => {
+            if formula_supports_rootless_upper_alias(formula) {
+                100
+            } else {
+                500
+            }
+        }
+        "3" => {
+            if formula.tones.len() == 4 && formula_has_intervals(formula, &["b7"]) {
+                420
+            } else {
+                500
+            }
+        }
+        "5" => {
+            if formula_has_upper_structure(formula) {
+                40
+            } else {
+                80
+            }
+        }
         _ => 200,
     }
 }
@@ -782,13 +931,199 @@ fn analysis_score(
     if !spec.alterations.is_empty() {
         score += u32::try_from(spec.alterations.len()).unwrap_or(10) * 25;
     }
+    if !omitted
+        && spec.seventh == Seventh::None
+        && spec.extension.is_none()
+        && !spec.adds.is_empty()
+        && !spec.adds.contains(&13)
+        && spec.alterations.is_empty()
+    {
+        score = score.saturating_sub(35);
+    }
     if matches!(spec.quality, Quality::Major)
         && spec.seventh == Seventh::None
         && spec.extension.is_none()
     {
         score = score.saturating_sub(10);
     }
+    if !omitted
+        && bass == root.pitch_class()
+        && matches!(spec.quality, Quality::Major)
+        && matches!(spec.seventh, Seventh::Minor)
+        && (spec.extension.is_some() || !spec.alterations.is_empty() || spec.alt)
+    {
+        score = score.saturating_sub(40);
+    }
     score
+}
+
+fn contextual_omission_adjustment(formula: &ChordFormula, omissions: &[String]) -> u32 {
+    if is_contextual_altered_upper_alias(formula, omissions) {
+        650
+    } else if is_contextual_rootless_half_diminished_alias(formula, omissions) {
+        500
+    } else if is_contextual_rootless_diminished_seventh_alias(formula, omissions) {
+        420
+    } else if is_contextual_rootless_upper_alias(formula, omissions) {
+        if omissions.iter().any(|omission| omission == "5") {
+            220
+        } else {
+            100
+        }
+    } else {
+        0
+    }
+}
+
+fn is_contextual_rootless_upper_alias(formula: &ChordFormula, omissions: &[String]) -> bool {
+    omissions.iter().any(|omission| omission == "1")
+        && omissions
+            .iter()
+            .all(|omission| matches!(omission.as_str(), "1" | "5"))
+        && formula.tones.len().saturating_sub(omissions.len()) >= 4
+        && !formula_has_altered_fifth(formula)
+        && formula_supports_rootless_upper_alias(formula)
+}
+
+fn is_contextual_altered_upper_alias(formula: &ChordFormula, omissions: &[String]) -> bool {
+    omissions.iter().any(|omission| omission == "1")
+        && omissions.iter().any(|omission| omission == "3")
+        && omissions
+            .iter()
+            .all(|omission| matches!(omission.as_str(), "1" | "3"))
+        && formula_has_intervals(formula, &["b7", "b9", "#9", "b13"])
+}
+
+fn is_contextual_rootless_diminished_seventh_alias(
+    formula: &ChordFormula,
+    omissions: &[String],
+) -> bool {
+    omissions == ["1"] && formula_has_intervals(formula, &["b3", "b5", "bb7"])
+}
+
+fn is_contextual_rootless_half_diminished_alias(
+    formula: &ChordFormula,
+    omissions: &[String],
+) -> bool {
+    omissions == ["1"]
+        && formula.tones.len() == 4
+        && formula_has_intervals(formula, &["b3", "b5", "b7"])
+}
+
+fn formula_supports_rootless_upper_alias(formula: &ChordFormula) -> bool {
+    formula_has_upper_structure(formula)
+        && formula.tones.iter().any(|tone| tone.degree == 7)
+        && formula
+            .tones
+            .iter()
+            .any(|tone| tone.degree == 3 && tone.interval.to_string() == "3")
+}
+
+fn formula_has_upper_structure(formula: &ChordFormula) -> bool {
+    formula
+        .tones
+        .iter()
+        .any(|tone| matches!(tone.degree, 9 | 11 | 13))
+}
+
+fn formula_has_altered_fifth(formula: &ChordFormula) -> bool {
+    formula
+        .tones
+        .iter()
+        .any(|tone| tone.degree == 5 && !tone.interval.is_natural_fifth())
+}
+
+fn formula_has_intervals(formula: &ChordFormula, intervals: &[&str]) -> bool {
+    intervals.iter().all(|interval| {
+        formula
+            .tones
+            .iter()
+            .any(|tone| tone.interval.to_string() == *interval)
+    })
+}
+
+fn is_useful_omitted_alias(analysis: &ChordAnalysis) -> bool {
+    if analysis.omissions == ["5"] {
+        return true;
+    }
+
+    is_useful_rootless_upper_alias(analysis)
+        || is_useful_altered_upper_alias(analysis)
+        || is_useful_rootless_diminished_seventh_alias(analysis)
+        || is_useful_rootless_half_diminished_alias(analysis)
+}
+
+fn is_useful_rootless_upper_alias(analysis: &ChordAnalysis) -> bool {
+    analysis.omissions.iter().any(|omission| omission == "1")
+        && analysis
+            .omissions
+            .iter()
+            .all(|omission| matches!(omission.as_str(), "1" | "5"))
+        && (analysis
+            .intervals
+            .len()
+            .saturating_sub(analysis.omissions.len())
+            >= 4
+            || analysis_has_dominant_ninth_shell(analysis)
+            || analysis_has_altered_dominant_upper(analysis))
+        && !analysis
+            .intervals
+            .iter()
+            .any(|interval| matches!(interval.as_str(), "b5" | "#5"))
+        && analysis
+            .intervals
+            .iter()
+            .any(|interval| matches!(interval.as_str(), "b7" | "7"))
+        && analysis.intervals.iter().any(|interval| {
+            matches!(
+                interval.as_str(),
+                "b9" | "9" | "#9" | "11" | "#11" | "b13" | "13"
+            )
+        })
+}
+
+fn analysis_has_altered_dominant_upper(analysis: &ChordAnalysis) -> bool {
+    analysis
+        .intervals
+        .iter()
+        .any(|interval| matches!(interval.as_str(), "b7"))
+        && analysis
+            .intervals
+            .iter()
+            .any(|interval| matches!(interval.as_str(), "b9" | "#9" | "#11" | "b13"))
+}
+
+fn analysis_has_dominant_ninth_shell(analysis: &ChordAnalysis) -> bool {
+    ["3", "b7", "9"]
+        .iter()
+        .all(|interval| analysis.intervals.iter().any(|value| value == interval))
+}
+
+fn is_useful_altered_upper_alias(analysis: &ChordAnalysis) -> bool {
+    analysis.omissions.iter().any(|omission| omission == "1")
+        && analysis.omissions.iter().any(|omission| omission == "3")
+        && analysis
+            .omissions
+            .iter()
+            .all(|omission| matches!(omission.as_str(), "1" | "3"))
+        && ["b7", "b9", "#9", "b13"]
+            .iter()
+            .all(|interval| analysis.intervals.iter().any(|value| value == interval))
+}
+
+fn is_useful_rootless_diminished_seventh_alias(analysis: &ChordAnalysis) -> bool {
+    analysis.omissions == ["1"]
+        && ["b3", "b5", "bb7"]
+            .iter()
+            .all(|interval| analysis.intervals.iter().any(|value| value == interval))
+}
+
+fn is_useful_rootless_half_diminished_alias(analysis: &ChordAnalysis) -> bool {
+    analysis.omissions == ["1"]
+        && analysis.intervals.len() == 4
+        && ["b3", "b5", "b7"]
+            .iter()
+            .all(|interval| analysis.intervals.iter().any(|value| value == interval))
 }
 
 fn chord_tone_bass_penalty(formula: &ChordFormula, bass: PitchClass) -> Option<u32> {

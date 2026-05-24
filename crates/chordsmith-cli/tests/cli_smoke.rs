@@ -254,7 +254,7 @@ fn voicings_rejects_pathological_limit() {
         .output()
         .expect("run chordsmith voicings --limit 1000000 Calt");
 
-    assert_eq!(output.status.code(), Some(65));
+    assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("invalid limit"));
 }
 
