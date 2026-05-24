@@ -702,7 +702,7 @@ fn build_analysis(
 
     let mut symbol = format!("{}{}", root, spec.suffix());
     if !omissions.is_empty() {
-        for omission in &omissions {
+        for omission in omissions.iter().filter(|omission| omission.as_str() != "5") {
             symbol.push_str("no");
             symbol.push_str(omission);
         }

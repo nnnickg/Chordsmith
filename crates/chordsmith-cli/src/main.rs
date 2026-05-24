@@ -427,6 +427,9 @@ fn print_identify(result: &IdentifyResult) -> Result<(), CliError> {
     match &result.primary {
         Some(primary) => {
             write_stdout(writeln!(out, "Primary: {}", primary.symbol))?;
+            if !primary.omissions.is_empty() {
+                write_stdout(writeln!(out, "Omit: {}", primary.omissions.join(",")))?;
+            }
             let aliases = result
                 .aliases
                 .iter()

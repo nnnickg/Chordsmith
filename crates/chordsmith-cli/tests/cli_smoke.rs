@@ -62,6 +62,20 @@ fn identify_prints_primary_chord() {
 }
 
 #[test]
+fn identify_prints_omissions_separately_from_primary_symbol() {
+    let output = chordsmith()
+        .args(["identify", "476xxx"])
+        .output()
+        .expect("run chordsmith identify omitted fifth dyad");
+
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Primary: E/G#"));
+    assert!(stdout.contains("Omit: 5"));
+    assert!(!stdout.contains("Primary: Eno5/G#"));
+}
+
+#[test]
 fn identify_json_outputs_primary_symbol() {
     let output = chordsmith()
         .args(["identify", "--json", "x12010"])

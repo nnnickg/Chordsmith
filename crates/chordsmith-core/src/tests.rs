@@ -299,6 +299,7 @@ fn golden_guitar_default_voicings_start_with_musician_grips() {
         ("G", "320003"),
         ("D", "xx0232"),
         ("A7", "x02020"),
+        ("Cadd9", "x32030"),
         ("Dadd9", "x54230"),
         ("C9", "x32330"),
         ("C7b9", "x32320"),
@@ -342,7 +343,9 @@ fn golden_ukulele_context_voicings_remain_useful_aliases() {
         "E7sus4b5"
     );
     assert!(rootless_c13.aliases.iter().any(|analysis| {
-        analysis.symbol == "C13no1no5" && analysis.class == AnalysisClass::UsefulAlias
+        analysis.symbol == "C13no1"
+            && analysis.omissions == ["1", "5"]
+            && analysis.class == AnalysisClass::UsefulAlias
     }));
 
     let c_over_g = identify_with_tuning("5787", uke).unwrap();
@@ -352,10 +355,9 @@ fn golden_ukulele_context_voicings_remain_useful_aliases() {
     }));
 
     let c_over_d = identify_with_tuning("x203", uke).unwrap();
-    assert_eq!(
-        c_over_d.primary.expect("C/D omitted-fifth primary").symbol,
-        "Cno5/D"
-    );
+    let c_over_d_primary = c_over_d.primary.expect("C/D omitted-fifth primary");
+    assert_eq!(c_over_d_primary.symbol, "C/D");
+    assert_eq!(c_over_d_primary.omissions, ["5"]);
 
     let c_over_d_shapes = voicings_with_tuning("C/D", uke, VoicingOptions::default()).unwrap();
     assert!(c_over_d_shapes.iter().all(|shape| {
@@ -367,7 +369,9 @@ fn golden_ukulele_context_voicings_remain_useful_aliases() {
 
     let rootless_g9 = identify_with_tuning("2x12", uke).unwrap();
     assert!(rootless_g9.aliases.iter().any(|analysis| {
-        analysis.symbol == "G9no1no5" && analysis.class == AnalysisClass::UsefulAlias
+        analysis.symbol == "G9no1"
+            && analysis.omissions == ["1", "5"]
+            && analysis.class == AnalysisClass::UsefulAlias
     }));
 
     let half_diminished = identify_with_tuning("2000", uke).unwrap();
@@ -1006,10 +1010,22 @@ fn identifies_non_chord_slash_bass_voicings() {
 #[test]
 fn identifies_non_chord_slash_bass_voicings_with_omissions() {
     let result = identify("xx0x10").unwrap();
-    assert_eq!(
-        result.primary.as_ref().expect("primary analysis").symbol,
-        "Cno5/D"
-    );
+    let primary = result.primary.as_ref().expect("primary analysis");
+    assert_eq!(primary.symbol, "C/D");
+    assert_eq!(primary.omissions, ["5"]);
+}
+
+#[test]
+fn simple_inverted_dyads_hide_optional_fifth_omission_in_symbol() {
+    let result = identify("476xxx").unwrap();
+    let primary = result.primary.as_ref().expect("primary analysis");
+    assert_eq!(primary.symbol, "E/G#");
+    assert_eq!(primary.omissions, ["5"]);
+
+    let result = identify("32x01x").unwrap();
+    let primary = result.primary.as_ref().expect("primary analysis");
+    assert_eq!(primary.symbol, "Gadd11");
+    assert_eq!(primary.omissions, ["5"]);
 }
 
 #[test]

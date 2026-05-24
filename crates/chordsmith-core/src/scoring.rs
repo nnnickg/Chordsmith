@@ -35,6 +35,8 @@ pub(crate) fn voicing_score(
     let trailing_mute_cost = trailing_mute_cost(frets, formula, string_count);
     let sparse_duplicate_cost = sparse_duplicate_pitch_cost(frets, tuning, formula, string_count);
     let open_bypass_cost = open_chord_tone_bypass_cost(frets, tuning, formula, string_count);
+    let low_extension_cluster_cost =
+        low_added_ninth_cluster_cost(frets, tuning, formula, string_count);
     let fingering_complexity_cost = fingering_complexity_cost(frets, string_count);
     let instrument_cost = instrument_voicing_cost(
         frets,
@@ -87,6 +89,7 @@ pub(crate) fn voicing_score(
         + trailing_mute_cost
         + sparse_duplicate_cost
         + open_bypass_cost
+        + low_extension_cluster_cost
         + fingering_complexity_cost
         + instrument_cost;
     score.saturating_sub(instrument_bonus)
@@ -998,6 +1001,51 @@ fn open_chord_tone_bypass_cost(
             excess * excess * 12
         })
         .sum()
+}
+
+fn low_added_ninth_cluster_cost(
+    frets: &[Option<u8>; MAX_STRING_COUNT],
+    tuning: GuitarTuning,
+    formula: &ChordFormula,
+    string_count: usize,
+) -> u32 {
+    if !formula_has_degree(formula, 9) {
+        return 0;
+    }
+
+    let Some(root) = formula.tones().iter().find(|tone| tone.degree == 1) else {
+        return 0;
+    };
+    let Some(ninth) = formula.tones().iter().find(|tone| tone.degree == 9) else {
+        return 0;
+    };
+
+    let mut played = [0i16; MAX_STRING_COUNT];
+    let mut played_count = 0;
+    for (string, fret) in frets.iter().take(string_count).enumerate() {
+        let Some(fret) = fret else {
+            continue;
+        };
+        played[played_count] = tuning.absolute_pitch(string, *fret);
+        played_count += 1;
+    }
+    if played_count < 2 {
+        return 0;
+    }
+    played[..played_count].sort_unstable();
+
+    let low = played[0];
+    let next = played[1];
+    let low_pitch = PitchClass::new(low);
+    let next_pitch = PitchClass::new(next);
+    if low_pitch.value() == root.pitch_class
+        && next_pitch.value() == ninth.pitch_class
+        && next.saturating_sub(low) <= 2
+    {
+        42
+    } else {
+        0
+    }
 }
 
 fn fingering_complexity_cost(frets: &[Option<u8>; MAX_STRING_COUNT], string_count: usize) -> u32 {
