@@ -269,6 +269,26 @@ fn supports_explicit_ukulele_tuning_octaves() {
         "Db6"
     );
 
+    let baritone_low_d = Tuning::parse_for_instrument("DGBE", Instrument::Ukulele).unwrap();
+    assert_eq!(
+        identify_with_tuning("0000", baritone_low_d)
+            .unwrap()
+            .primary
+            .expect("linear baritone primary")
+            .symbol,
+        "G6/D"
+    );
+
+    let baritone_high_d = Tuning::parse_for_instrument("D4,G3,B3,E4", Instrument::Ukulele).unwrap();
+    assert_eq!(
+        identify_with_tuning("0000", baritone_high_d)
+            .unwrap()
+            .primary
+            .expect("high-D baritone primary")
+            .symbol,
+        "G6"
+    );
+
     let mixed = Tuning::parse_for_instrument("G4,C,E,A", Instrument::Ukulele)
         .expect_err("mixed tuning octaves should fail");
     assert!(mixed.to_string().contains("octaves"));
@@ -1502,8 +1522,8 @@ fn all_voicings_has_a_hard_result_cap() {
     let error = voicings(
         "Calt",
         VoicingOptions {
-            max_fret: 24,
-            max_span: 24,
+            max_fret: 30,
+            max_span: 30,
             mode: VoicingMode::All,
             ..VoicingOptions::default()
         },
@@ -1515,7 +1535,7 @@ fn all_voicings_has_a_hard_result_cap() {
 
 #[test]
 fn rejects_frets_outside_standard_guitar_range() {
-    let error = identify("25-x-x-x-x-x").expect_err("fret above 24 should fail");
+    let error = identify("31-x-x-x-x-x").expect_err("fret above 30 should fail");
     assert!(
         error.to_string().contains("standard guitar range"),
         "{error}"
@@ -1524,11 +1544,11 @@ fn rejects_frets_outside_standard_guitar_range() {
     let error = voicings(
         "C",
         VoicingOptions {
-            min_fret: 25,
+            min_fret: 31,
             ..VoicingOptions::default()
         },
     )
-    .expect_err("min fret above 24 should fail");
+    .expect_err("min fret above 30 should fail");
     assert!(
         error.to_string().contains("standard guitar range"),
         "{error}"
@@ -1537,11 +1557,11 @@ fn rejects_frets_outside_standard_guitar_range() {
     let error = voicings(
         "C",
         VoicingOptions {
-            max_fret: 25,
+            max_fret: 31,
             ..VoicingOptions::default()
         },
     )
-    .expect_err("max fret above 24 should fail");
+    .expect_err("max fret above 30 should fail");
     assert!(
         error.to_string().contains("standard guitar range"),
         "{error}"
@@ -1550,11 +1570,11 @@ fn rejects_frets_outside_standard_guitar_range() {
     let error = voicings(
         "C",
         VoicingOptions {
-            max_span: 25,
+            max_span: 31,
             ..VoicingOptions::default()
         },
     )
-    .expect_err("max span above 24 should fail");
+    .expect_err("max span above 30 should fail");
     assert!(
         error.to_string().contains("standard guitar range"),
         "{error}"

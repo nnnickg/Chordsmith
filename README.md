@@ -14,7 +14,7 @@ chordsmith voicings Em
 
 ## Status
 
-Version 1.2.0. The engine separates chord theory from CLI formatting, uses
+Version 1.3.0. The engine separates chord theory from CLI formatting, uses
 deterministic ranking, and treats chord names as analyses over pitch-class sets
 rather than as chart entries.
 
@@ -78,11 +78,12 @@ eight-string note names either compact (`GCEA`, `DADGAD`, `BEADGBE`,
 notes may include octaves (`G3,C4,E4,A4`, `E2,A2,D3,G3,B3,E4`); when any
 octave is present, every tuning note must have one. Standard ukulele uses
 high-G re-entrant `GCEA`, and direct transpositions of that four-string interval
-pattern infer the same re-entrant contour. Use explicit octaves for low-G
-ukulele, linear baritone, or custom re-entrant tunings.
-`--min-fret`, `--max-fret`, and `--max-span` are intentionally capped at 24.
+pattern infer the same re-entrant contour, except baritone `DGBE` defaults to a
+linear low-D contour. Use explicit octaves for low-G ukulele, high-D baritone,
+or custom re-entrant tunings.
+`--min-fret`, `--max-fret`, and `--max-span` are intentionally capped at 30.
 `--min-fret` values above 0 exclude open strings. When `--min-fret` is 12 or
-higher and `--max-fret` is omitted, the CLI scans through fret 24. `alt` means
+higher and `--max-fret` is omitted, the CLI scans through fret 30. `alt` means
 the concrete altered dominant set `1 3 b7 b9 #9 b13`. `--all` is capped at
 25,000 generated voicings; `--limit` is capped at 1,000 curated voicings.
 Narrow broad searches with fret and span flags.

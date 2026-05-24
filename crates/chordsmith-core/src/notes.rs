@@ -641,9 +641,17 @@ const fn lift_above(mut pitch: i16, floor: i16) -> i16 {
 
 const fn is_reentrant_ukulele_pattern(notes: [NoteName; MAX_STRING_COUNT]) -> bool {
     let first = notes[0].pitch_class();
-    notes[1].pitch_class().value() == first.transpose(5).value()
+    !is_baritone_ukulele_pattern(notes)
+        && notes[1].pitch_class().value() == first.transpose(5).value()
         && notes[2].pitch_class().value() == first.transpose(9).value()
         && notes[3].pitch_class().value() == first.transpose(2).value()
+}
+
+const fn is_baritone_ukulele_pattern(notes: [NoteName; MAX_STRING_COUNT]) -> bool {
+    notes[0].pitch_class().value() == 2
+        && notes[1].pitch_class().value() == 7
+        && notes[2].pitch_class().value() == 11
+        && notes[3].pitch_class().value() == 4
 }
 
 fn has_tuning_separators(input: &str) -> bool {

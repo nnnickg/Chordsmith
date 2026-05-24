@@ -10,7 +10,7 @@ checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
 
 [[package]]
 name = "chordsmith-cli"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "chordsmith-core",
  "clap",
@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "chordsmith-core"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "serde",
 ]

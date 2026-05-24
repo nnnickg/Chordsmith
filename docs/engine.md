@@ -20,7 +20,7 @@
 - Parsed note names allow natural, single, and double accidentals. Opposite
   accidentals stop root parsing so `C#b5` means `C#` plus `b5`, while bare
   invalid spellings such as `C#b` are rejected.
-- Fret and non-open span range is `0..=24`.
+- Fret and non-open span range is `0..=30`.
 - `alt` is a concrete altered dominant shorthand: `1 3 b7 b9 #9 b13`.
 - Default text output hides theoretical aliases; JSON keeps alias class data.
 

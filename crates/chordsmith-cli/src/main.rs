@@ -157,19 +157,19 @@ fn cli() -> Command {
                     Arg::new("min_fret")
                         .long("min-fret")
                         .value_name("FRET")
-                        .help("Lowest fret to scan, 0..=24; values above 0 exclude open strings"),
+                        .help("Lowest fret to scan, 0..=30; values above 0 exclude open strings"),
                 )
                 .arg(
                     Arg::new("max_fret")
                         .long("max-fret")
                         .value_name("FRET")
-                        .help("Highest fret to scan, 0..=24"),
+                        .help("Highest fret to scan, 0..=30"),
                 )
                 .arg(
                     Arg::new("max_span")
                         .long("max-span")
                         .value_name("FRETS")
-                        .help("Maximum non-open fret span, 0..=24"),
+                        .help("Maximum non-open fret span, 0..=30"),
                 )
                 .arg(
                     Arg::new("limit")

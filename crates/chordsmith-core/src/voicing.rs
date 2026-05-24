@@ -14,6 +14,10 @@ use crate::{
     MAX_ALL_VOICINGS, MAX_DIVERSITY_SCORE_WINDOW, MAX_LIMIT, MAX_STANDARD_FRET, MAX_STRING_COUNT,
 };
 
+const MAX_FRET_CHOICES: usize = MAX_STANDARD_FRET as usize + 2;
+type StringChoices = InlineVec<Option<u8>, MAX_FRET_CHOICES>;
+type PerStringChoices = [StringChoices; MAX_STRING_COUNT];
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum VoicingMode {
     Curated { limit: usize },
@@ -102,20 +106,23 @@ pub fn voicings_with_tuning(
     let target = required_pitch_set(&chord, &formula);
     let bass_rule = bass_rule_for_chord(&chord, tuning);
 
-    let mut per_string = Vec::new();
-    for (string, open) in tuning.notes().iter().enumerate() {
-        let mut choices = vec![None];
+    let mut per_string = [StringChoices::default(); MAX_STRING_COUNT];
+    for (string, choices) in per_string
+        .iter_mut()
+        .enumerate()
+        .take(tuning.string_count())
+    {
+        choices.push(None);
         for fret in options.min_fret..=options.max_fret {
-            let pitch = open.pitch_class().transpose(i16::from(fret));
+            let pitch = tuning.pitch_at(string, fret);
             if target.contains(pitch) {
                 choices.push(Some(fret));
             }
         }
         choices.sort_by_key(|choice| choice_sort_key(*choice, string));
-        per_string.push(choices);
     }
     let suffix_sets = suffix_pitch_sets(&per_string, tuning);
-    let suffix_frets = suffix_fret_stats(&per_string);
+    let suffix_frets = suffix_fret_stats(&per_string, tuning.string_count());
     let suffix_required_bass_min =
         suffix_required_bass_min_pitches(&per_string, tuning, bass_rule.required());
     if bass_rule.required().is_some() && suffix_required_bass_min[0].is_none() {
@@ -217,8 +224,8 @@ fn required_pitch_set(chord: &ChordSymbol, formula: &ChordFormula) -> PitchSet {
 }
 
 struct VoicingSearch<'a> {
-    per_string: &'a [Vec<Option<u8>>],
-    suffix_sets: &'a [PitchSet],
+    per_string: &'a PerStringChoices,
+    suffix_sets: &'a [PitchSet; MAX_STRING_COUNT + 1],
     suffix_min_non_open: &'a [Option<u8>; MAX_STRING_COUNT + 1],
     suffix_has_open: &'a [bool; MAX_STRING_COUNT + 1],
     suffix_required_bass_min: &'a [Option<i16>; MAX_STRING_COUNT + 1],
@@ -252,23 +259,20 @@ fn enumerate_voicings(
         return;
     }
 
-    if let Some(choices) = search.per_string.get(string_idx) {
-        for choice in choices {
-            if out.should_stop() {
-                return;
-            }
-            frets[string_idx] = *choice;
-            let next_state = state.advance(search, string_idx, *choice);
-            if !partial_voicing_can_complete(search, string_idx + 1, &next_state) {
-                continue;
-            }
-            if partial_voicing_score_floor(search, string_idx + 1, &next_state)
-                > out.score_ceiling()
-            {
-                continue;
-            }
-            enumerate_voicings(search, string_idx + 1, frets, next_state, out);
+    let choices = &search.per_string[string_idx];
+    for choice in choices {
+        if out.should_stop() {
+            return;
         }
+        frets[string_idx] = *choice;
+        let next_state = state.advance(search, string_idx, *choice);
+        if !partial_voicing_can_complete(search, string_idx + 1, &next_state) {
+            continue;
+        }
+        if partial_voicing_score_floor(search, string_idx + 1, &next_state) > out.score_ceiling() {
+            continue;
+        }
+        enumerate_voicings(search, string_idx + 1, frets, next_state, out);
     }
 }
 
@@ -412,9 +416,12 @@ fn choice_sort_key(choice: Option<u8>, string: usize) -> (u8, u8, usize) {
     }
 }
 
-fn suffix_pitch_sets(per_string: &[Vec<Option<u8>>], tuning: GuitarTuning) -> Vec<PitchSet> {
+fn suffix_pitch_sets(
+    per_string: &PerStringChoices,
+    tuning: GuitarTuning,
+) -> [PitchSet; MAX_STRING_COUNT + 1] {
     let string_count = tuning.string_count();
-    let mut suffix = vec![PitchSet::empty(); string_count + 1];
+    let mut suffix = [PitchSet::empty(); MAX_STRING_COUNT + 1];
     for string in (0..string_count).rev() {
         let mut set = suffix[string + 1];
         for fret in &per_string[string] {
@@ -434,11 +441,11 @@ struct SuffixFretStats {
     has_open: [bool; MAX_STRING_COUNT + 1],
 }
 
-fn suffix_fret_stats(per_string: &[Vec<Option<u8>>]) -> SuffixFretStats {
+fn suffix_fret_stats(per_string: &PerStringChoices, string_count: usize) -> SuffixFretStats {
     let mut min_non_open = [None::<u8>; MAX_STRING_COUNT + 1];
     let mut has_open = [false; MAX_STRING_COUNT + 1];
 
-    for string in (0..per_string.len()).rev() {
+    for string in (0..string_count).rev() {
         min_non_open[string] = min_non_open[string + 1];
         has_open[string] = has_open[string + 1];
 
@@ -461,7 +468,7 @@ fn suffix_fret_stats(per_string: &[Vec<Option<u8>>]) -> SuffixFretStats {
 }
 
 fn suffix_required_bass_min_pitches(
-    per_string: &[Vec<Option<u8>>],
+    per_string: &PerStringChoices,
     tuning: GuitarTuning,
     required_bass: Option<PitchClass>,
 ) -> [Option<i16>; MAX_STRING_COUNT + 1] {
@@ -470,7 +477,7 @@ fn suffix_required_bass_min_pitches(
         return suffix;
     };
 
-    for string in (0..per_string.len()).rev() {
+    for string in (0..tuning.string_count()).rev() {
         suffix[string] = suffix[string + 1];
         for fret in &per_string[string] {
             let Some(fret) = fret else {

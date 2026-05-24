@@ -356,25 +356,25 @@ fn clap_errors_are_not_wrapped_twice() {
 #[test]
 fn voicings_rejects_frets_outside_standard_range() {
     let output = chordsmith()
-        .args(["voicings", "--min-fret", "25", "C"])
+        .args(["voicings", "--min-fret", "31", "C"])
         .output()
-        .expect("run chordsmith voicings --min-fret 25");
+        .expect("run chordsmith voicings --min-fret 31");
 
     assert_eq!(output.status.code(), Some(65));
     assert!(String::from_utf8_lossy(&output.stderr).contains("standard guitar range"));
 
     let output = chordsmith()
-        .args(["voicings", "--max-fret", "25", "C"])
+        .args(["voicings", "--max-fret", "31", "C"])
         .output()
-        .expect("run chordsmith voicings --max-fret 25");
+        .expect("run chordsmith voicings --max-fret 31");
 
     assert_eq!(output.status.code(), Some(65));
     assert!(String::from_utf8_lossy(&output.stderr).contains("standard guitar range"));
 
     let output = chordsmith()
-        .args(["voicings", "--max-span", "25", "C"])
+        .args(["voicings", "--max-span", "31", "C"])
         .output()
-        .expect("run chordsmith voicings --max-span 25");
+        .expect("run chordsmith voicings --max-span 31");
 
     assert_eq!(output.status.code(), Some(65));
     assert!(String::from_utf8_lossy(&output.stderr).contains("standard guitar range"));
