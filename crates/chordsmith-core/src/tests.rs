@@ -1,7 +1,9 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use super::*;
+use crate::inline_vec::InlineVec;
 use crate::scoring::rank_diverse_voicing_candidates;
+use crate::symbol::MAX_OMISSIONS;
 use crate::voicing::VoicingCandidate;
 
 fn primary(input: &str) -> String {
@@ -24,10 +26,18 @@ fn candidates_from_voicings(voicings: &[Voicing]) -> Vec<VoicingCandidate> {
                 frets
             },
             string_count: voicing.frets.len(),
-            omissions: voicing.omissions.clone(),
+            omissions: omission_degrees(&voicing.omissions),
             score: voicing.score,
         })
         .collect()
+}
+
+fn omission_degrees(omissions: &[String]) -> InlineVec<u8, MAX_OMISSIONS> {
+    let mut out = InlineVec::default();
+    for omission in omissions {
+        let _ = out.push(omission.parse().expect("omission degree"));
+    }
+    out
 }
 
 fn identifies_as_primary_or_useful_alias(result: &IdentifyResult, requested: &str) -> bool {

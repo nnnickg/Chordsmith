@@ -635,7 +635,7 @@ pub(crate) fn inferred_omissions(missing: PitchSet, formula: &ChordFormula) -> O
     Some(omissions.iter().map(|degree| degree.to_string()).collect())
 }
 
-fn inferred_omission_degrees(
+pub(crate) fn inferred_omission_degrees(
     missing: PitchSet,
     formula: &ChordFormula,
 ) -> Option<InlineVec<u8, MAX_OMISSIONS>> {

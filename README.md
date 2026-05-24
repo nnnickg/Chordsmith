@@ -14,7 +14,7 @@ chordsmith voicings Em
 
 ## Status
 
-Version 1.1.1. The engine separates chord theory from CLI formatting, uses
+Version 1.2.0. The engine separates chord theory from CLI formatting, uses
 deterministic ranking, and treats chord names as analyses over pitch-class sets
 rather than as chart entries.
 

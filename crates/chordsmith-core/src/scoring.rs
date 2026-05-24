@@ -1,14 +1,16 @@
 use crate::formula::ChordFormula;
 use crate::notes::{GuitarTuning, Instrument, PitchClass};
-use crate::voicing::{BassRule, VoicingCandidate, VoicingMode, VoicingOptions, fret_profile};
-use crate::{MAX_DIVERSITY_SCORE_WINDOW, MAX_STANDARD_FRET, MAX_STRING_COUNT};
+use crate::voicing::{
+    BassRule, FretProfile, VoicingCandidate, VoicingMode, VoicingOptions, fret_profile,
+};
+use crate::{MAX_DIVERSITY_SCORE_WINDOW, MAX_STRING_COUNT};
 
 pub(crate) fn voicing_score(
     frets: &[Option<u8>; MAX_STRING_COUNT],
-    tuning: GuitarTuning,
+    tuning: &GuitarTuning,
     bass_rule: BassRule,
     formula: &ChordFormula,
-    omissions: &[String],
+    omissions: &[u8],
     string_count: usize,
 ) -> u32 {
     let profile = fret_profile(frets, string_count);
@@ -25,16 +27,38 @@ pub(crate) fn voicing_score(
         internal_mute_cost(frets, non_open, profile.active_count, string_count);
     let jump_cost = adjacent_fret_jump_cost(frets, string_count);
     let duplicate_cost = duplicate_pitch_cost(frets, tuning, string_count);
-    let high_open_cost = high_open_mix_cost(frets, tuning.instrument(), string_count);
+    let high_open_cost = high_open_mix_cost(
+        frets,
+        tuning.instrument(),
+        non_open,
+        profile.has_open,
+        profile.active_count,
+        string_count,
+    );
     let low_open_gap_cost = low_open_gap_cost(frets, string_count);
     let preferred_bass_cost =
         preferred_bass_mismatch_cost(frets, tuning, bass_rule.preferred(), string_count);
     let harmonic_defect_cost = voicing_omission_cost(omissions, formula);
-    let internal_mute_quality_cost =
-        internal_mute_quality_cost(frets, non_open, formula, tuning.instrument(), string_count);
-    let trailing_mute_cost = trailing_mute_cost(frets, formula, string_count);
+    let internal_mute_quality_cost = internal_mute_quality_cost(
+        frets,
+        non_open,
+        formula,
+        tuning.instrument(),
+        profile.active_count,
+        profile.has_open,
+        string_count,
+    );
+    let trailing_mute_cost = trailing_mute_cost(frets, formula, profile.active_count, string_count);
     let sparse_duplicate_cost = sparse_duplicate_pitch_cost(frets, tuning, formula, string_count);
-    let open_bypass_cost = open_chord_tone_bypass_cost(frets, tuning, formula, string_count);
+    let open_bypass_cost = open_chord_tone_bypass_cost(
+        frets,
+        tuning,
+        formula,
+        non_open,
+        profile.has_open,
+        profile.active_count,
+        string_count,
+    );
     let low_extension_cluster_cost =
         low_added_ninth_cluster_cost(frets, tuning, formula, string_count);
     let fingering_complexity_cost = fingering_complexity_cost(frets, string_count);
@@ -65,14 +89,19 @@ pub(crate) fn voicing_score(
         + high_open_cost
         + low_open_gap_cost
         + preferred_bass_cost;
-    score = score.saturating_sub(open_position_bonus(frets, string_count));
+    score = score.saturating_sub(open_position_bonus(
+        non_open,
+        profile.active_count,
+        profile.has_open,
+        string_count,
+    ));
     score = score.saturating_sub(open_root_bass_bonus(
         frets,
         tuning,
         bass_rule.preferred(),
         string_count,
     ));
-    score = score.saturating_sub(open_bass_grip_bonus(frets, string_count));
+    score = score.saturating_sub(open_bass_grip_bonus(frets, profile.has_open, string_count));
     score = score.saturating_sub(closed_shape_bonus(
         frets,
         non_open,
@@ -80,9 +109,27 @@ pub(crate) fn voicing_score(
         profile.has_open,
         string_count,
     ));
-    score = score.saturating_sub(barre_grip_bonus(frets, non_open, string_count));
-    score = score.saturating_sub(compact_low_grip_bonus(frets, non_open, string_count));
-    score = score.saturating_sub(jazz_shell_bonus(frets, non_open, formula, string_count));
+    score = score.saturating_sub(barre_grip_bonus(
+        frets,
+        non_open,
+        profile.active_count,
+        profile.has_open,
+        string_count,
+    ));
+    score = score.saturating_sub(compact_low_grip_bonus(
+        non_open,
+        profile.active_count,
+        profile.has_open,
+        string_count,
+    ));
+    score = score.saturating_sub(jazz_shell_bonus(
+        frets,
+        non_open,
+        formula,
+        profile.active_count,
+        profile.has_open,
+        string_count,
+    ));
     let score = score
         + harmonic_defect_cost
         + internal_mute_quality_cost
@@ -96,15 +143,25 @@ pub(crate) fn voicing_score(
 }
 
 pub(crate) fn rank_voicing_candidates(
-    mut candidates: Vec<VoicingCandidate>,
+    candidates: Vec<VoicingCandidate>,
     options: VoicingOptions,
 ) -> Vec<VoicingCandidate> {
-    candidates.sort_by(compare_voicing_candidates);
-
     match options.mode {
-        VoicingMode::All => candidates,
+        VoicingMode::All => rank_all_voicing_candidates(candidates),
         VoicingMode::Curated { limit } => rank_diverse_voicing_candidates(candidates, limit),
     }
+}
+
+fn rank_all_voicing_candidates(candidates: Vec<VoicingCandidate>) -> Vec<VoicingCandidate> {
+    let mut ranked = candidates
+        .into_iter()
+        .map(RankedVoicingCandidate::new)
+        .collect::<Vec<_>>();
+    ranked.sort_by(compare_ranked_voicing_candidates);
+    ranked
+        .into_iter()
+        .map(RankedVoicingCandidate::into_candidate)
+        .collect()
 }
 
 pub(crate) fn rank_diverse_voicing_candidates(
@@ -115,13 +172,11 @@ pub(crate) fn rank_diverse_voicing_candidates(
         return Vec::new();
     }
 
-    let mut candidates_with_family: Vec<(VoicingCandidate, VoicingFamily)> = candidates
+    let mut candidates_with_family: Vec<RankedVoicingCandidate> = candidates
         .into_iter()
-        .map(|c| {
-            let family = voicing_family(&c.frets, c.string_count);
-            (c, family)
-        })
+        .map(RankedVoicingCandidate::new)
         .collect();
+    candidates_with_family.sort_by(compare_ranked_voicing_candidates);
 
     let mut selected = Vec::new();
     let mut family_counts = [0u32; VOICING_FAMILY_COUNT];
@@ -130,7 +185,7 @@ pub(crate) fn rank_diverse_voicing_candidates(
     while selected.len() < limit && !candidates_with_family.is_empty() {
         let best_raw_score = candidates_with_family
             .first()
-            .map(|(c, _)| c.score)
+            .map(|candidate| candidate.candidate.score)
             .unwrap_or(0);
         let candidate_ceiling =
             best_raw_score.saturating_add(diversity_score_window(best_raw_score));
@@ -138,80 +193,87 @@ pub(crate) fn rank_diverse_voicing_candidates(
         let best_idx = candidates_with_family
             .iter()
             .enumerate()
-            .filter(|(_, (c, _))| c.score <= candidate_ceiling)
-            .min_by(|(_, (left, left_family)), (_, (right, right_family))| {
-                let left_family_count = family_counts[left_family.index()];
-                let left_pos_count = position_counts[left_family.position.index()];
-                let left_eff_score = left.score + left_family_count * 5 + left_pos_count;
+            .take_while(|(_, candidate)| candidate.candidate.score <= candidate_ceiling)
+            .min_by(|(_, left), (_, right)| {
+                let left_family_count = family_counts[left.family.index()];
+                let left_pos_count = position_counts[left.family.position.index()];
+                let left_eff_score = left.candidate.score + left_family_count * 5 + left_pos_count;
 
-                let right_family_count = family_counts[right_family.index()];
-                let right_pos_count = position_counts[right_family.position.index()];
-                let right_eff_score = right.score + right_family_count * 5 + right_pos_count;
+                let right_family_count = family_counts[right.family.index()];
+                let right_pos_count = position_counts[right.family.position.index()];
+                let right_eff_score =
+                    right.candidate.score + right_family_count * 5 + right_pos_count;
 
                 left_eff_score
                     .cmp(&right_eff_score)
-                    .then(left.score.cmp(&right.score))
-                    .then_with(|| compare_voicing_candidates(left, right))
+                    .then(left.candidate.score.cmp(&right.candidate.score))
+                    .then_with(|| compare_ranked_voicing_candidates(left, right))
             })
             .map(|(idx, _)| idx)
             .unwrap_or(0);
 
-        let (chosen_candidate, chosen_family) = candidates_with_family.remove(best_idx);
-        family_counts[chosen_family.index()] += 1;
-        position_counts[chosen_family.position.index()] += 1;
-        selected.push(chosen_candidate);
+        let chosen = candidates_with_family.remove(best_idx);
+        family_counts[chosen.family.index()] += 1;
+        position_counts[chosen.family.position.index()] += 1;
+        selected.push(chosen);
     }
 
-    selected.sort_by(compare_voicing_candidates);
+    selected.sort_by(compare_ranked_voicing_candidates);
     selected
+        .into_iter()
+        .map(RankedVoicingCandidate::into_candidate)
+        .collect()
 }
 
-fn compare_voicing_candidates(
-    left: &VoicingCandidate,
-    right: &VoicingCandidate,
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RankedVoicingCandidate {
+    candidate: VoicingCandidate,
+    family: VoicingFamily,
+    position_tie_break: u8,
+    active_count: usize,
+    compact_key: [u8; 32],
+    compact_key_len: usize,
+}
+
+impl RankedVoicingCandidate {
+    fn new(candidate: VoicingCandidate) -> Self {
+        let profile = fret_profile(&candidate.frets, candidate.string_count);
+        let family = voicing_family(&candidate.frets, candidate.string_count, &profile);
+        let position_tie_break = voicing_position_tie_break(candidate.string_count, &profile);
+        let (compact_key, compact_key_len) =
+            fingering_compact_key(&candidate.frets, candidate.string_count);
+        Self {
+            candidate,
+            family,
+            position_tie_break,
+            active_count: profile.active_count,
+            compact_key,
+            compact_key_len,
+        }
+    }
+
+    fn into_candidate(self) -> VoicingCandidate {
+        self.candidate
+    }
+}
+
+fn compare_ranked_voicing_candidates(
+    left: &RankedVoicingCandidate,
+    right: &RankedVoicingCandidate,
 ) -> std::cmp::Ordering {
-    left.score
-        .cmp(&right.score)
-        .then_with(|| compare_voicing_tie_break(left, right))
+    left.candidate
+        .score
+        .cmp(&right.candidate.score)
+        .then(left.position_tie_break.cmp(&right.position_tie_break))
+        .then_with(|| right.active_count.cmp(&left.active_count))
         .then_with(|| {
-            compare_fingering_compact(
-                &left.frets,
-                left.string_count,
-                &right.frets,
-                right.string_count,
-            )
+            left.compact_key[..left.compact_key_len]
+                .cmp(&right.compact_key[..right.compact_key_len])
         })
 }
 
-fn compare_voicing_tie_break(
-    left: &VoicingCandidate,
-    right: &VoicingCandidate,
-) -> std::cmp::Ordering {
-    voicing_position_tie_break(&left.frets, left.string_count)
-        .cmp(&voicing_position_tie_break(
-            &right.frets,
-            right.string_count,
-        ))
-        .then_with(|| {
-            right
-                .frets
-                .iter()
-                .take(right.string_count)
-                .flatten()
-                .count()
-                .cmp(&left.frets.iter().take(left.string_count).flatten().count())
-        })
-}
-
-fn voicing_position_tie_break(frets: &[Option<u8>; MAX_STRING_COUNT], string_count: usize) -> u8 {
-    let profile = fret_profile(frets, string_count);
-    let max_fret = frets
-        .iter()
-        .take(string_count)
-        .flatten()
-        .copied()
-        .max()
-        .unwrap_or(0);
+fn voicing_position_tie_break(string_count: usize, profile: &FretProfile) -> u8 {
+    let max_fret = profile.non_open().iter().copied().max().unwrap_or(0);
     let min_non_open = profile.non_open().iter().copied().min().unwrap_or(0);
 
     if profile.has_open && max_fret <= 3 && profile.active_count + 1 >= string_count {
@@ -223,17 +285,6 @@ fn voicing_position_tie_break(frets: &[Option<u8>; MAX_STRING_COUNT], string_cou
     } else {
         3
     }
-}
-
-fn compare_fingering_compact(
-    left: &[Option<u8>; MAX_STRING_COUNT],
-    left_string_count: usize,
-    right: &[Option<u8>; MAX_STRING_COUNT],
-    right_string_count: usize,
-) -> std::cmp::Ordering {
-    let (left_key, left_len) = fingering_compact_key(left, left_string_count);
-    let (right_key, right_len) = fingering_compact_key(right, right_string_count);
-    left_key[..left_len].cmp(&right_key[..right_len])
 }
 
 fn fingering_compact_key(
@@ -384,20 +435,21 @@ impl StringDensity {
     }
 }
 
-fn voicing_family(frets: &[Option<u8>; MAX_STRING_COUNT], string_count: usize) -> VoicingFamily {
-    let mut active_count = 0;
+fn voicing_family(
+    frets: &[Option<u8>; MAX_STRING_COUNT],
+    string_count: usize,
+    profile: &FretProfile,
+) -> VoicingFamily {
     let mut first = None;
     let mut last = None;
     for (idx, fret) in frets.iter().take(string_count).enumerate() {
         if fret.is_some() {
-            active_count += 1;
             first.get_or_insert(idx);
             last = Some(idx);
         }
     }
     let first = first.unwrap_or(0);
     let last = last.unwrap_or(0);
-    let profile = fret_profile(frets, string_count);
     let non_open = profile.non_open();
     let has_open = profile.has_open;
     let max_non_open = non_open.iter().copied().max().unwrap_or(0);
@@ -423,9 +475,9 @@ fn voicing_family(frets: &[Option<u8>; MAX_STRING_COUNT], string_count: usize) -
         StringBand::Middle
     };
 
-    let density = if active_count == string_count {
+    let density = if profile.active_count == string_count {
         StringDensity::Full
-    } else if active_count + 1 >= string_count && active_count >= 3 {
+    } else if profile.active_count + 1 >= string_count && profile.active_count >= 3 {
         StringDensity::Four
     } else {
         StringDensity::Small
@@ -541,7 +593,7 @@ fn adjacent_fret_jump_cost(frets: &[Option<u8>; MAX_STRING_COUNT], string_count:
 
 fn duplicate_pitch_cost(
     frets: &[Option<u8>; MAX_STRING_COUNT],
-    tuning: GuitarTuning,
+    tuning: &GuitarTuning,
     string_count: usize,
 ) -> u32 {
     let mut counts = [0u8; 12];
@@ -563,10 +615,11 @@ fn duplicate_pitch_cost(
 fn high_open_mix_cost(
     frets: &[Option<u8>; MAX_STRING_COUNT],
     instrument: Instrument,
+    non_open: &[u8],
+    has_open: bool,
+    active_count: usize,
     string_count: usize,
 ) -> u32 {
-    let profile = fret_profile(frets, string_count);
-    let non_open = profile.non_open();
     let (Some(min), Some(max)) = (non_open.iter().min(), non_open.iter().max()) else {
         return 0;
     };
@@ -574,7 +627,7 @@ fn high_open_mix_cost(
         return 0;
     }
 
-    if !profile.has_open {
+    if !has_open {
         return 0;
     }
 
@@ -582,7 +635,7 @@ fn high_open_mix_cost(
         return 0;
     }
 
-    if compact_open_treble_grip(frets, non_open, profile.active_count, string_count) {
+    if compact_open_treble_grip(frets, non_open, active_count, string_count) {
         return 0;
     }
 
@@ -703,7 +756,7 @@ fn low_open_gap_cost(frets: &[Option<u8>; MAX_STRING_COUNT], string_count: usize
 
 fn preferred_bass_mismatch_cost(
     frets: &[Option<u8>; MAX_STRING_COUNT],
-    tuning: GuitarTuning,
+    tuning: &GuitarTuning,
     preferred_bass: Option<PitchClass>,
     string_count: usize,
 ) -> u32 {
@@ -726,20 +779,20 @@ fn preferred_bass_mismatch_cost(
     }
 }
 
-fn voicing_omission_cost(omissions: &[String], formula: &ChordFormula) -> u32 {
+fn voicing_omission_cost(omissions: &[u8], formula: &ChordFormula) -> u32 {
     let upper_structure = has_upper_structure(formula);
     omissions
         .iter()
-        .map(|omission| match omission.as_str() {
-            "1" => {
+        .map(|omission| match *omission {
+            1 => {
                 if upper_structure {
                     45
                 } else {
                     140
                 }
             }
-            "3" => 160,
-            "5" => {
+            3 => 160,
+            5 => {
                 if upper_structure {
                     0
                 } else {
@@ -759,6 +812,8 @@ fn internal_mute_quality_cost(
     non_open: &[u8],
     formula: &ChordFormula,
     instrument: Instrument,
+    active_count: usize,
+    has_open: bool,
     string_count: usize,
 ) -> u32 {
     let count = internal_mutes(frets, string_count);
@@ -766,12 +821,6 @@ fn internal_mute_quality_cost(
         return 0;
     }
 
-    let active_count = frets.iter().take(string_count).flatten().count();
-    let has_open = frets
-        .iter()
-        .take(string_count)
-        .flatten()
-        .any(|fret| *fret == 0);
     let compact_extended_shell = has_upper_structure(formula)
         && !has_open
         && active_count <= 4
@@ -798,6 +847,7 @@ fn internal_mute_quality_cost(
 fn trailing_mute_cost(
     frets: &[Option<u8>; MAX_STRING_COUNT],
     formula: &ChordFormula,
+    active_count: usize,
     string_count: usize,
 ) -> u32 {
     let trailing = trailing_mutes(frets, string_count);
@@ -805,7 +855,6 @@ fn trailing_mute_cost(
         return 0;
     }
 
-    let active_count = frets.iter().take(string_count).flatten().count();
     let compact_extended_shell = has_upper_structure(formula) && active_count <= 4;
     let unit = if compact_extended_shell {
         2
@@ -974,7 +1023,7 @@ fn ukulele_treble_mute_cost(frets: &[Option<u8>; MAX_STRING_COUNT], string_count
 
 fn sparse_duplicate_pitch_cost(
     frets: &[Option<u8>; MAX_STRING_COUNT],
-    tuning: GuitarTuning,
+    tuning: &GuitarTuning,
     formula: &ChordFormula,
     string_count: usize,
 ) -> u32 {
@@ -1029,19 +1078,16 @@ fn sparse_duplicate_pitch_cost(
 
 fn open_chord_tone_bypass_cost(
     frets: &[Option<u8>; MAX_STRING_COUNT],
-    tuning: GuitarTuning,
+    tuning: &GuitarTuning,
     formula: &ChordFormula,
+    non_open: &[u8],
+    has_open: bool,
+    active_count: usize,
     string_count: usize,
 ) -> u32 {
-    let profile = fret_profile(frets, string_count);
-    if !profile.has_open
+    if !has_open
         || dense_open_bass_grip(frets, string_count)
-        || compact_open_treble_grip(
-            frets,
-            profile.non_open(),
-            profile.active_count,
-            string_count,
-        )
+        || compact_open_treble_grip(frets, non_open, active_count, string_count)
     {
         return 0;
     }
@@ -1063,7 +1109,7 @@ fn open_chord_tone_bypass_cost(
 
 fn low_added_ninth_cluster_cost(
     frets: &[Option<u8>; MAX_STRING_COUNT],
-    tuning: GuitarTuning,
+    tuning: &GuitarTuning,
     formula: &ChordFormula,
     string_count: usize,
 ) -> u32 {
@@ -1161,8 +1207,17 @@ fn best_barre(
     string_count: usize,
 ) -> Option<BarreCandidate> {
     let mut best = None;
+    let mut unique_frets = [0u8; MAX_STRING_COUNT];
+    let mut unique_count = 0;
+    for fret in frets.iter().take(string_count).flatten().copied() {
+        if fret > 0 && !unique_frets[..unique_count].contains(&fret) {
+            unique_frets[unique_count] = fret;
+            unique_count += 1;
+        }
+    }
+    unique_frets[..unique_count].sort_unstable();
 
-    for fret in 1..=MAX_STANDARD_FRET {
+    for &fret in &unique_frets[..unique_count] {
         for start in 0..string_count {
             if frets[start] != Some(fret) || covered[start] {
                 continue;
@@ -1269,20 +1324,13 @@ fn formula_has_degree(formula: &ChordFormula, degree: u8) -> bool {
     formula.tones.iter().any(|tone| tone.degree == degree)
 }
 
-fn open_position_bonus(frets: &[Option<u8>; MAX_STRING_COUNT], string_count: usize) -> u32 {
-    let active_count = frets.iter().take(string_count).flatten().count();
-    let has_open = frets
-        .iter()
-        .take(string_count)
-        .flatten()
-        .any(|fret| *fret == 0);
-    let max_fret = frets
-        .iter()
-        .take(string_count)
-        .flatten()
-        .copied()
-        .max()
-        .unwrap_or(0);
+fn open_position_bonus(
+    non_open: &[u8],
+    active_count: usize,
+    has_open: bool,
+    string_count: usize,
+) -> u32 {
+    let max_fret = non_open.iter().copied().max().unwrap_or(0);
     let min_active = if string_count >= 6 {
         4
     } else {
@@ -1303,7 +1351,7 @@ fn open_position_bonus(frets: &[Option<u8>; MAX_STRING_COUNT], string_count: usi
 
 fn open_root_bass_bonus(
     frets: &[Option<u8>; MAX_STRING_COUNT],
-    tuning: GuitarTuning,
+    tuning: &GuitarTuning,
     expected_bass: Option<PitchClass>,
     string_count: usize,
 ) -> u32 {
@@ -1362,8 +1410,11 @@ fn open_root_bass_bonus(
     }
 }
 
-fn open_bass_grip_bonus(frets: &[Option<u8>; MAX_STRING_COUNT], string_count: usize) -> u32 {
-    let mut has_open = false;
+fn open_bass_grip_bonus(
+    frets: &[Option<u8>; MAX_STRING_COUNT],
+    has_open: bool,
+    string_count: usize,
+) -> u32 {
     let mut first_fretted = None;
     let mut last_fretted = None;
     let mut fretted_count = 0;
@@ -1376,7 +1427,6 @@ fn open_bass_grip_bonus(frets: &[Option<u8>; MAX_STRING_COUNT], string_count: us
                 if first_fretted.is_some() {
                     return 0;
                 }
-                has_open = true;
             }
             Some(value) => {
                 first_fretted.get_or_insert(idx);
@@ -1453,14 +1503,10 @@ fn closed_shape_bonus(
 fn barre_grip_bonus(
     frets: &[Option<u8>; MAX_STRING_COUNT],
     non_open: &[u8],
+    active_count: usize,
+    has_open: bool,
     string_count: usize,
 ) -> u32 {
-    let active_count = frets.iter().take(string_count).flatten().count();
-    let has_open = frets
-        .iter()
-        .take(string_count)
-        .flatten()
-        .any(|fret| *fret == 0);
     if has_open || active_count != string_count || internal_mutes(frets, string_count) > 0 {
         return 0;
     }
@@ -1493,16 +1539,11 @@ fn barre_grip_bonus(
 }
 
 fn compact_low_grip_bonus(
-    frets: &[Option<u8>; MAX_STRING_COUNT],
     non_open: &[u8],
+    active_count: usize,
+    has_open: bool,
     string_count: usize,
 ) -> u32 {
-    let active_count = frets.iter().take(string_count).flatten().count();
-    let has_open = frets
-        .iter()
-        .take(string_count)
-        .flatten()
-        .any(|fret| *fret == 0);
     if has_open || active_count + 1 < string_count {
         return 0;
     }
@@ -1518,18 +1559,14 @@ fn jazz_shell_bonus(
     frets: &[Option<u8>; MAX_STRING_COUNT],
     non_open: &[u8],
     formula: &ChordFormula,
+    active_count: usize,
+    has_open: bool,
     string_count: usize,
 ) -> u32 {
     if !has_upper_structure(formula) {
         return 0;
     }
 
-    let active_count = frets.iter().take(string_count).flatten().count();
-    let has_open = frets
-        .iter()
-        .take(string_count)
-        .flatten()
-        .any(|fret| *fret == 0);
     if has_open || !(3..=4).contains(&active_count) {
         return 0;
     }

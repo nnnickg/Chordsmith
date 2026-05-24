@@ -9,6 +9,8 @@ use crate::{
     MAX_NOTE_ACCIDENTALS, MAX_STANDARD_FRET, MAX_STRING_COUNT, UKULELE_STRING_COUNT,
 };
 
+const TUNING_FRET_COUNT: usize = MAX_STANDARD_FRET as usize + 1;
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct PitchClass(pub(crate) u8);
 
@@ -359,6 +361,7 @@ pub struct Tuning {
     instrument: Instrument,
     notes: [NoteName; MAX_STRING_COUNT],
     open_pitches: [i16; MAX_STRING_COUNT],
+    pitch_classes: [[PitchClass; TUNING_FRET_COUNT]; MAX_STRING_COUNT],
     string_count: usize,
 }
 
@@ -373,10 +376,12 @@ impl Tuning {
             out[idx] = notes[idx];
             idx += 1;
         }
+        let open_pitches = ascending_open_pitches(out, GUITAR_STRING_COUNT);
         Self {
             instrument: Instrument::Guitar,
             notes: out,
-            open_pitches: ascending_open_pitches(out, GUITAR_STRING_COUNT),
+            open_pitches,
+            pitch_classes: pitch_class_table(open_pitches),
             string_count: GUITAR_STRING_COUNT,
         }
     }
@@ -388,10 +393,12 @@ impl Tuning {
             out[idx] = notes[idx];
             idx += 1;
         }
+        let open_pitches = open_pitches_for(out, UKULELE_STRING_COUNT, Instrument::Ukulele);
         Self {
             instrument: Instrument::Ukulele,
             notes: out,
-            open_pitches: open_pitches_for(out, UKULELE_STRING_COUNT, Instrument::Ukulele),
+            open_pitches,
+            pitch_classes: pitch_class_table(open_pitches),
             string_count: UKULELE_STRING_COUNT,
         }
     }
@@ -403,10 +410,12 @@ impl Tuning {
             out[idx] = notes[idx];
             idx += 1;
         }
+        let open_pitches = ascending_open_pitches(out, GUITAR7_STRING_COUNT);
         Self {
             instrument: Instrument::Guitar7,
             notes: out,
-            open_pitches: ascending_open_pitches(out, GUITAR7_STRING_COUNT),
+            open_pitches,
+            pitch_classes: pitch_class_table(open_pitches),
             string_count: GUITAR7_STRING_COUNT,
         }
     }
@@ -418,10 +427,12 @@ impl Tuning {
             out[idx] = notes[idx];
             idx += 1;
         }
+        let open_pitches = ascending_open_pitches(out, GUITAR8_STRING_COUNT);
         Self {
             instrument: Instrument::Guitar8,
             notes: out,
-            open_pitches: ascending_open_pitches(out, GUITAR8_STRING_COUNT),
+            open_pitches,
+            pitch_classes: pitch_class_table(open_pitches),
             string_count: GUITAR8_STRING_COUNT,
         }
     }
@@ -448,12 +459,14 @@ impl Tuning {
                 instrument.string_count()
             )));
         }
+        let open_pitches = parsed
+            .open_pitches
+            .unwrap_or_else(|| open_pitches_for(parsed.notes, string_count, instrument));
         Ok(Self {
             instrument,
             notes: parsed.notes,
-            open_pitches: parsed
-                .open_pitches
-                .unwrap_or_else(|| open_pitches_for(parsed.notes, string_count, instrument)),
+            open_pitches,
+            pitch_classes: pitch_class_table(open_pitches),
             string_count,
         })
     }
@@ -493,11 +506,11 @@ impl Tuning {
         Self::from_parsed(parsed, Some(instrument))
     }
 
-    pub const fn string_count(self) -> usize {
+    pub const fn string_count(&self) -> usize {
         self.string_count
     }
 
-    pub const fn instrument(self) -> Instrument {
+    pub const fn instrument(&self) -> Instrument {
         self.instrument
     }
 
@@ -505,19 +518,19 @@ impl Tuning {
         &self.notes[..self.string_count]
     }
 
-    pub(crate) const fn note(self, string: usize) -> NoteName {
+    pub(crate) const fn note(&self, string: usize) -> NoteName {
         self.notes[string]
     }
 
-    pub(crate) const fn absolute_pitch(self, string: usize, fret: u8) -> i16 {
+    pub(crate) const fn absolute_pitch(&self, string: usize, fret: u8) -> i16 {
         self.open_pitches[string] + fret as i16
     }
 
-    pub(crate) const fn pitch_at(self, string: usize, fret: u8) -> PitchClass {
-        PitchClass::new(self.absolute_pitch(string, fret))
+    pub(crate) const fn pitch_at(&self, string: usize, fret: u8) -> PitchClass {
+        self.pitch_classes[string][fret as usize]
     }
 
-    pub(crate) const fn prefers_root_bass(self) -> bool {
+    pub(crate) const fn prefers_root_bass(&self) -> bool {
         !(self.string_count > 1 && self.open_pitches[0] > self.open_pitches[1])
     }
 }
@@ -589,6 +602,22 @@ const fn ascending_open_pitches(
         out[idx] = pitch;
         previous = pitch;
         idx += 1;
+    }
+    out
+}
+
+const fn pitch_class_table(
+    open_pitches: [i16; MAX_STRING_COUNT],
+) -> [[PitchClass; TUNING_FRET_COUNT]; MAX_STRING_COUNT] {
+    let mut out = [[PitchClass(0); TUNING_FRET_COUNT]; MAX_STRING_COUNT];
+    let mut string = 0usize;
+    while string < MAX_STRING_COUNT {
+        let mut fret = 0usize;
+        while fret < TUNING_FRET_COUNT {
+            out[string][fret] = PitchClass::new(open_pitches[string] + fret as i16);
+            fret += 1;
+        }
+        string += 1;
     }
     out
 }

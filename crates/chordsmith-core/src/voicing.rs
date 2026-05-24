@@ -1,12 +1,14 @@
 use serde::Serialize;
 
 use crate::formula::ChordFormula;
-use crate::identify::{can_infer_omission, can_omit, inferred_omissions};
+use crate::identify::{can_infer_omission, can_omit, inferred_omission_degrees};
+use crate::inline_vec::InlineVec;
 use crate::notes::{
     Fingering, GuitarTuning, Instrument, NoteName, PitchClass, PitchSet, STANDARD_TUNING,
 };
 use crate::scoring::{rank_voicing_candidates, voicing_score};
 use crate::symbol::ChordSymbol;
+use crate::symbol::MAX_OMISSIONS;
 use crate::{
     ChordsmithError, DEFAULT_LIMIT, DEFAULT_MAX_FRET, DEFAULT_MAX_SPAN, DEFAULT_MIN_FRET,
     MAX_ALL_VOICINGS, MAX_DIVERSITY_SCORE_WINDOW, MAX_LIMIT, MAX_STANDARD_FRET, MAX_STRING_COUNT,
@@ -279,7 +281,7 @@ trait VoicingCollector {
 pub(crate) struct VoicingCandidate {
     pub(crate) frets: [Option<u8>; MAX_STRING_COUNT],
     pub(crate) string_count: usize,
-    pub(crate) omissions: Vec<String>,
+    pub(crate) omissions: InlineVec<u8, MAX_OMISSIONS>,
     pub(crate) score: u32,
 }
 
@@ -865,7 +867,7 @@ fn build_voicing_candidate(
         return None;
     }
     let missing_formula = search.formula_target.difference(current);
-    let omissions = inferred_omissions(missing_formula, search.formula)?;
+    let omissions = inferred_omission_degrees(missing_formula, search.formula)?;
     if let Some(expected_bass) = search.bass_rule.required()
         && actual_bass != Some(expected_bass)
     {
@@ -874,7 +876,7 @@ fn build_voicing_candidate(
 
     let score = voicing_score(
         &frets,
-        search.tuning,
+        &search.tuning,
         search.bass_rule,
         search.formula,
         &omissions,
@@ -910,9 +912,13 @@ fn materialize_voicing(candidate: VoicingCandidate, search: &VoicingSearch<'_>) 
         dashed: fingering.dashed(),
         frets: frets[..string_count].to_vec(),
         notes: voicing_notes(&frets, search),
-        omissions: candidate.omissions,
+        omissions: omission_strings(&candidate.omissions),
         score: candidate.score,
     }
+}
+
+fn omission_strings(omissions: &InlineVec<u8, MAX_OMISSIONS>) -> Vec<String> {
+    omissions.iter().map(|degree| degree.to_string()).collect()
 }
 
 fn voicing_notes(
