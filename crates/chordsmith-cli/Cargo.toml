@@ -1,0 +1,22 @@
+[package]
+name = "chordsmith-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[[bin]]
+name = "chordsmith"
+path = "src/main.rs"
+
+[dependencies]
+chordsmith-core.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

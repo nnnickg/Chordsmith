@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and upload, for example v1.0.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cli:
+    name: Build CLI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+    steps:
+      - name: Checkout Release Tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Toolchain
+        run: |
+          rustup show
+          cargo --version
+          rustc --version
+
+      - name: Verify Release Version
+        run: bash ./scripts/verify-release-version.sh "$RELEASE_TAG"
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2.8.1
+        with:
+          shared-key: release-cli-${{ matrix.os }}
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Build
+        run: cargo build --release --locked -p chordsmith-cli
+
+      - name: Package
+        run: |
+          version="$(bash ./scripts/chordsmith-version.sh)"
+          os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          arch="$(uname -m)"
+          asset="chordsmith-v${version}-${os}-${arch}"
+          dist="$RUNNER_TEMP/chordsmith-release"
+          mkdir -p "$dist/$asset"
+          cp target/release/chordsmith "$dist/$asset/chordsmith"
+          tar -C "$dist" -czf "$dist/$asset.tar.gz" "$asset"
+          shasum -a 256 "$dist/$asset.tar.gz" | tee "$dist/$asset.tar.gz.sha256"
+          echo "RELEASE_ASSET=$dist/$asset.tar.gz" >> "$GITHUB_ENV"
+          echo "RELEASE_SHA=$dist/$asset.tar.gz.sha256" >> "$GITHUB_ENV"
+          echo "RELEASE_ASSET_NAME=$asset.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Upload Release Assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            "$RELEASE_ASSET#$RELEASE_ASSET_NAME" \
+            "$RELEASE_SHA#$RELEASE_ASSET_NAME.sha256" \
+            --clobber
