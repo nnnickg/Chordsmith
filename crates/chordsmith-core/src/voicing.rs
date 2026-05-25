@@ -1,12 +1,12 @@
 use serde::Serialize;
 
 use crate::formula::ChordFormula;
-use crate::identify::{can_infer_omission, can_omit, inferred_omission_degrees};
+use crate::identify::{InferredOmission, can_infer_omission, can_omit, inferred_omission_degrees};
 use crate::inline_vec::InlineVec;
 use crate::notes::{
     Fingering, GuitarTuning, Instrument, NoteName, PitchClass, PitchSet, STANDARD_TUNING,
 };
-use crate::scoring::{rank_voicing_candidates, voicing_score};
+use crate::scoring::{rank_voicing_candidates, voicing_score_with_profile};
 use crate::symbol::ChordSymbol;
 use crate::symbol::MAX_OMISSIONS;
 use crate::{
@@ -104,7 +104,7 @@ pub fn voicings_with_tuning(
     let formula = chord.formula();
     let formula_target = formula.pitch_set();
     let target = required_pitch_set(&chord, &formula);
-    let bass_rule = bass_rule_for_chord(&chord, tuning);
+    let bass_rule = bass_rule_for_chord(&chord, &tuning);
 
     let mut per_string = [StringChoices::default(); MAX_STRING_COUNT];
     for (string, choices) in per_string
@@ -119,12 +119,12 @@ pub fn voicings_with_tuning(
                 choices.push(Some(fret));
             }
         }
-        choices.sort_by_key(|choice| choice_sort_key(*choice, string));
+        choices.sort_unstable_by_key(|choice| choice_sort_key(*choice, string));
     }
-    let suffix_sets = suffix_pitch_sets(&per_string, tuning);
+    let suffix_sets = suffix_pitch_sets(&per_string, &tuning);
     let suffix_frets = suffix_fret_stats(&per_string, tuning.string_count());
     let suffix_required_bass_min =
-        suffix_required_bass_min_pitches(&per_string, tuning, bass_rule.required());
+        suffix_required_bass_min_pitches(&per_string, &tuning, bass_rule.required());
     if bass_rule.required().is_some() && suffix_required_bass_min[0].is_none() {
         return Ok(Vec::new());
     }
@@ -135,6 +135,7 @@ pub fn voicings_with_tuning(
             non_omissible_pitches.bits &= !(1u16 << tone.pitch_class);
         }
     }
+    let omissible_missing_sets = OmissibleMissingSets::new(&formula);
 
     let mut frets = [None; MAX_STRING_COUNT];
     let search = VoicingSearch {
@@ -146,11 +147,12 @@ pub fn voicings_with_tuning(
         target,
         formula_target,
         non_omissible_pitches,
+        omissible_missing_sets,
         bass_rule,
         bass_spelling: chord.bass,
         formula: &formula,
         options,
-        tuning,
+        tuning: &tuning,
     };
     let out = match options.mode {
         VoicingMode::All => {
@@ -204,7 +206,7 @@ impl BassRule {
     }
 }
 
-fn bass_rule_for_chord(chord: &ChordSymbol, tuning: GuitarTuning) -> BassRule {
+fn bass_rule_for_chord(chord: &ChordSymbol, tuning: &GuitarTuning) -> BassRule {
     if let Some(bass) = chord.bass {
         return BassRule::Required(bass.pitch_class());
     }
@@ -223,6 +225,46 @@ fn required_pitch_set(chord: &ChordSymbol, formula: &ChordFormula) -> PitchSet {
     target
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct OmissibleMissingSets {
+    bits: [u64; 64],
+}
+
+impl OmissibleMissingSets {
+    fn new(formula: &ChordFormula) -> Self {
+        let mut out = Self { bits: [0; 64] };
+        let formula_set = formula.pitch_set();
+        let mut pitches = [PitchClass(0); 12];
+        let mut pitch_count = 0usize;
+        for pitch in formula_set.iter() {
+            pitches[pitch_count] = pitch;
+            pitch_count += 1;
+        }
+        for mask in 0..(1usize << pitch_count) {
+            let mut missing = PitchSet::empty();
+            for (idx, pitch) in pitches.iter().copied().take(pitch_count).enumerate() {
+                if mask & (1usize << idx) != 0 {
+                    missing.insert(pitch);
+                }
+            }
+            if can_omit(missing, formula) {
+                out.insert(missing);
+            }
+        }
+        out
+    }
+
+    fn insert(&mut self, missing: PitchSet) {
+        let idx = usize::from(missing.bits);
+        self.bits[idx / 64] |= 1u64 << (idx % 64);
+    }
+
+    fn contains(self, missing: PitchSet) -> bool {
+        let idx = usize::from(missing.bits);
+        self.bits[idx / 64] & (1u64 << (idx % 64)) != 0
+    }
+}
+
 struct VoicingSearch<'a> {
     per_string: &'a PerStringChoices,
     suffix_sets: &'a [PitchSet; MAX_STRING_COUNT + 1],
@@ -232,11 +274,12 @@ struct VoicingSearch<'a> {
     target: PitchSet,
     formula_target: PitchSet,
     non_omissible_pitches: PitchSet,
+    omissible_missing_sets: OmissibleMissingSets,
     bass_rule: BassRule,
     bass_spelling: Option<NoteName>,
     formula: &'a ChordFormula,
     options: VoicingOptions,
-    tuning: GuitarTuning,
+    tuning: &'a GuitarTuning,
 }
 
 impl VoicingSearch<'_> {
@@ -253,7 +296,7 @@ fn enumerate_voicings(
     out: &mut impl VoicingCollector,
 ) {
     if string_idx == search.string_count() {
-        if let Some(candidate) = build_voicing_candidate(*frets, search) {
+        if let Some(candidate) = build_voicing_candidate(*frets, search, state) {
             out.insert(candidate);
         }
         return;
@@ -292,7 +335,7 @@ trait VoicingCollector {
 pub(crate) struct VoicingCandidate {
     pub(crate) frets: [Option<u8>; MAX_STRING_COUNT],
     pub(crate) string_count: usize,
-    pub(crate) omissions: InlineVec<u8, MAX_OMISSIONS>,
+    pub(crate) omissions: InlineVec<InferredOmission, MAX_OMISSIONS>,
     pub(crate) score: u32,
 }
 
@@ -306,7 +349,7 @@ impl AllVoicingCollector {
     fn new(limit: usize) -> Self {
         Self {
             limit,
-            voicings: Vec::new(),
+            voicings: Vec::with_capacity(limit),
             exceeded: false,
         }
     }
@@ -345,10 +388,11 @@ struct TopVoicingCollector {
 
 impl TopVoicingCollector {
     fn new(limit: usize) -> Self {
+        let retained_capacity = limit.saturating_mul(64).min(MAX_ALL_VOICINGS);
         Self {
             limit,
-            best_scores: Vec::new(),
-            retained: Vec::new(),
+            best_scores: Vec::with_capacity(limit),
+            retained: Vec::with_capacity(retained_capacity),
             ceiling: u32::MAX,
         }
     }
@@ -418,7 +462,7 @@ fn choice_sort_key(choice: Option<u8>, string: usize) -> (u8, u8, usize) {
 
 fn suffix_pitch_sets(
     per_string: &PerStringChoices,
-    tuning: GuitarTuning,
+    tuning: &GuitarTuning,
 ) -> [PitchSet; MAX_STRING_COUNT + 1] {
     let string_count = tuning.string_count();
     let mut suffix = [PitchSet::empty(); MAX_STRING_COUNT + 1];
@@ -469,7 +513,7 @@ fn suffix_fret_stats(per_string: &PerStringChoices, string_count: usize) -> Suff
 
 fn suffix_required_bass_min_pitches(
     per_string: &PerStringChoices,
-    tuning: GuitarTuning,
+    tuning: &GuitarTuning,
     required_bass: Option<PitchClass>,
 ) -> [Option<i16>; MAX_STRING_COUNT + 1] {
     let mut suffix = [None::<i16>; MAX_STRING_COUNT + 1];
@@ -501,6 +545,8 @@ struct PartialVoicingState {
     active_count: usize,
     has_open: bool,
     pitch_counts: [u8; 12],
+    duplicate_pitch_cost: u32,
+    non_open: [u8; MAX_STRING_COUNT],
     non_open_count: usize,
     non_open_sum: u16,
     min_non_open: Option<u8>,
@@ -510,6 +556,7 @@ struct PartialVoicingState {
     internal_mutes: u32,
     trailing_mutes_after_active: u8,
     first_played: Option<(usize, u8)>,
+    last_played: Option<usize>,
     lowest_pitch: Option<(i16, PitchClass)>,
 }
 
@@ -520,6 +567,8 @@ impl Default for PartialVoicingState {
             active_count: 0,
             has_open: false,
             pitch_counts: [0; 12],
+            duplicate_pitch_cost: 0,
+            non_open: [0; MAX_STRING_COUNT],
             non_open_count: 0,
             non_open_sum: 0,
             min_non_open: None,
@@ -529,6 +578,7 @@ impl Default for PartialVoicingState {
             internal_mutes: 0,
             trailing_mutes_after_active: 0,
             first_played: None,
+            last_played: None,
             lowest_pitch: None,
         }
     }
@@ -550,12 +600,17 @@ impl PartialVoicingState {
             self.internal_mutes += u32::from(self.trailing_mutes_after_active);
             self.trailing_mutes_after_active = 0;
         }
+        self.last_played = Some(string);
 
         self.active_count += 1;
         let absolute_pitch = search.tuning.absolute_pitch(string, fret);
         let pitch = search.tuning.pitch_at(string, fret);
         self.pitch_set.insert(pitch);
-        self.pitch_counts[usize::from(pitch.value())] += 1;
+        let pitch_count = &mut self.pitch_counts[usize::from(pitch.value())];
+        if *pitch_count >= 2 {
+            self.duplicate_pitch_cost += 8;
+        }
+        *pitch_count += 1;
         if self
             .lowest_pitch
             .is_none_or(|(current, _)| absolute_pitch < current)
@@ -569,6 +624,7 @@ impl PartialVoicingState {
         }
 
         self.non_open_count += 1;
+        self.non_open[self.non_open_count - 1] = fret;
         self.non_open_sum += u16::from(fret);
         self.min_non_open = Some(self.min_non_open.map_or(fret, |current| current.min(fret)));
         self.max_non_open = Some(self.max_non_open.map_or(fret, |current| current.max(fret)));
@@ -587,6 +643,22 @@ impl PartialVoicingState {
         match (self.min_non_open, self.max_non_open) {
             (Some(min), Some(max)) => max.saturating_sub(min) <= max_span,
             _ => true,
+        }
+    }
+
+    fn fret_profile(self) -> FretProfile {
+        FretProfile {
+            non_open: self.non_open,
+            non_open_count: self.non_open_count,
+            non_open_sum: self.non_open_sum,
+            min_non_open: self.min_non_open,
+            max_non_open: self.max_non_open,
+            active_count: self.active_count,
+            has_open: self.has_open,
+            first_played: self.first_played.map(|(string, _)| string),
+            last_played: self.last_played,
+            internal_mutes: self.internal_mutes,
+            trailing_mutes: usize::from(self.trailing_mutes_after_active),
         }
     }
 }
@@ -623,7 +695,7 @@ fn partial_voicing_can_complete(
     }
 
     let missing_formula = search.formula_target.difference(available);
-    can_omit(missing_formula, search.formula)
+    search.omissible_missing_sets.contains(missing_formula)
 }
 
 fn partial_voicing_score_floor(
@@ -643,17 +715,11 @@ fn partial_base_score_floor(
     let position = partial_position_cost_floor(search, next_string, state);
     let relative = partial_relative_fret_cost_floor(state);
     let span = partial_fret_span_cost_floor(state);
-    let duplicates = state
-        .pitch_counts
-        .iter()
-        .map(|count| count.saturating_sub(2))
-        .map(|excess| u32::from(excess) * 8)
-        .sum::<u32>();
     let internal_mutes = state.internal_mutes * 4;
     position
         + relative
         + span
-        + duplicates
+        + state.duplicate_pitch_cost
         + state.adjacent_jump_cost
         + internal_mutes
         + partial_active_string_cost_floor(state.active_count, next_string, search.string_count())
@@ -733,43 +799,85 @@ fn max_possible_bonus(
     state: &PartialVoicingState,
 ) -> u32 {
     let can_play_open = state.has_open || suffix_can_play_open(search, next_string);
+    let max_active = state.active_count + search.string_count().saturating_sub(next_string);
 
-    let mut bonus = 0u32;
-    // open_position_bonus upper bound.
-    if can_play_open && state.max_non_open.is_none_or(|max| max <= 3) {
-        bonus += 22;
+    let mut open_bonus = 0u32;
+    if can_play_open {
+        let min_active = if search.string_count() >= 6 {
+            4
+        } else {
+            search.string_count().saturating_sub(1)
+        };
+        // open_position_bonus upper bound.
+        if state.max_non_open.is_none_or(|max| max <= 3) && max_active >= min_active {
+            open_bonus += if max_active == search.string_count() {
+                22
+            } else if max_active + 1 == search.string_count() {
+                10
+            } else {
+                4
+            };
+        }
+        // open_root_bass_bonus upper bound.
+        if search.bass_rule.preferred().is_some() && state.max_non_open.is_none_or(|max| max <= 4) {
+            open_bonus += if search.string_count() >= 6 {
+                match max_active {
+                    5.. => 18,
+                    4 => 14,
+                    _ => 8,
+                }
+            } else if max_active == search.string_count() {
+                18
+            } else if max_active + 1 == search.string_count() {
+                14
+            } else {
+                8
+            };
+        }
+        // open_bass_grip_bonus upper bound.
+        if state.first_played.is_none_or(|(_, fret)| fret == 0)
+            && state.min_non_open.is_none_or(|min| min >= 5)
+        {
+            open_bonus += 20;
+        }
+        open_bonus += max_possible_instrument_bonus(search, next_string, state, can_play_open);
     }
-    // open_root_bass_bonus upper bound.
-    if state.first_played.is_none_or(|(_, fret)| fret == 0) {
-        bonus += 18;
+
+    let mut closed_bonus = 0u32;
+    if !state.has_open {
+        let min_active = if search.string_count() >= 6 {
+            4
+        } else {
+            search.string_count().saturating_sub(1)
+        };
+        // closed_shape_bonus upper bound.
+        if state.internal_mutes == 0 && max_active >= min_active {
+            closed_bonus += 30;
+        }
+        // barre_grip_bonus upper bound.
+        if state.internal_mutes == 0 && max_active == search.string_count() {
+            closed_bonus += 12;
+        }
+        // compact_low_grip_bonus upper bound.
+        if max_active + 1 >= search.string_count()
+            && state.min_non_open.is_none_or(|min| {
+                min <= 3
+                    || min_future_non_open_fret(search, next_string)
+                        .is_some_and(|future| future <= 3)
+            })
+        {
+            closed_bonus += 8;
+        }
+        // jazz_shell_bonus upper bound.
+        if state.internal_mutes <= 1
+            && has_upper_structure(search.formula)
+            && (state.active_count..=max_active).any(|count| (3..=4).contains(&count))
+        {
+            closed_bonus += 14;
+        }
     }
-    // open_bass_grip_bonus upper bound.
-    if state.first_played.is_none_or(|(_, fret)| fret == 0) {
-        bonus += 20;
-    }
-    // closed_shape_bonus upper bound.
-    if !state.has_open && state.internal_mutes == 0 {
-        bonus += 30;
-    }
-    // barre_grip_bonus upper bound.
-    if !state.has_open && state.internal_mutes == 0 {
-        bonus += 12;
-    }
-    // compact_low_grip_bonus upper bound.
-    if !state.has_open
-        && state.min_non_open.is_none_or(|min| {
-            min <= 3
-                || min_future_non_open_fret(search, next_string).is_some_and(|future| future <= 3)
-        })
-    {
-        bonus += 8;
-    }
-    // jazz_shell_bonus upper bound.
-    if !state.has_open && state.internal_mutes <= 1 {
-        bonus += 14;
-    }
-    bonus += max_possible_instrument_bonus(search, next_string, state, can_play_open);
-    bonus
+
+    open_bonus.max(closed_bonus)
 }
 
 fn max_possible_instrument_bonus(
@@ -845,17 +953,38 @@ fn formula_has_degree(formula: &ChordFormula, degree: u8) -> bool {
     formula.tones().iter().any(|tone| tone.degree == degree)
 }
 
+fn has_upper_structure(formula: &ChordFormula) -> bool {
+    formula
+        .tones()
+        .iter()
+        .any(|tone| matches!(tone.degree, 6 | 7 | 9 | 11 | 13))
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FretProfile {
     pub(crate) non_open: [u8; MAX_STRING_COUNT],
     pub(crate) non_open_count: usize,
+    pub(crate) non_open_sum: u16,
+    pub(crate) min_non_open: Option<u8>,
+    pub(crate) max_non_open: Option<u8>,
     pub(crate) active_count: usize,
     pub(crate) has_open: bool,
+    pub(crate) first_played: Option<usize>,
+    pub(crate) last_played: Option<usize>,
+    pub(crate) internal_mutes: u32,
+    pub(crate) trailing_mutes: usize,
 }
 
 impl FretProfile {
     pub(crate) fn non_open(&self) -> &[u8] {
         &self.non_open[..self.non_open_count]
+    }
+
+    pub(crate) fn fret_span(&self) -> Option<u8> {
+        let (Some(min), Some(max)) = (self.min_non_open, self.max_non_open) else {
+            return None;
+        };
+        Some(max.saturating_sub(min))
     }
 }
 
@@ -865,59 +994,77 @@ pub(crate) fn fret_profile(
 ) -> FretProfile {
     let mut non_open = [0u8; MAX_STRING_COUNT];
     let mut non_open_count = 0;
+    let mut non_open_sum = 0u16;
+    let mut min_non_open = None::<u8>;
+    let mut max_non_open = None::<u8>;
     let mut active_count = 0;
     let mut has_open = false;
+    let mut first_played = None::<usize>;
+    let mut last_played = None::<usize>;
+    let mut internal_mutes = 0u32;
+    let mut trailing_mutes_after_active = 0usize;
 
-    for fret in frets.iter().take(string_count).flatten().copied() {
+    for (idx, fret) in frets.iter().take(string_count).enumerate() {
+        let Some(fret) = fret else {
+            if active_count > 0 {
+                trailing_mutes_after_active += 1;
+            }
+            continue;
+        };
+
+        if active_count == 0 {
+            first_played = Some(idx);
+        } else {
+            internal_mutes += u32::try_from(trailing_mutes_after_active).unwrap_or(0);
+            trailing_mutes_after_active = 0;
+        }
+        last_played = Some(idx);
         active_count += 1;
-        if fret == 0 {
+
+        if *fret == 0 {
             has_open = true;
         } else {
-            non_open[non_open_count] = fret;
+            non_open[non_open_count] = *fret;
             non_open_count += 1;
+            non_open_sum += u16::from(*fret);
+            min_non_open = Some(min_non_open.map_or(*fret, |current| current.min(*fret)));
+            max_non_open = Some(max_non_open.map_or(*fret, |current| current.max(*fret)));
         }
     }
 
     FretProfile {
         non_open,
         non_open_count,
+        non_open_sum,
+        min_non_open,
+        max_non_open,
         active_count,
         has_open,
+        first_played,
+        last_played,
+        internal_mutes,
+        trailing_mutes: trailing_mutes_after_active,
     }
 }
 
 fn build_voicing_candidate(
     frets: [Option<u8>; MAX_STRING_COUNT],
     search: &VoicingSearch<'_>,
+    state: PartialVoicingState,
 ) -> Option<VoicingCandidate> {
-    let profile = fret_profile(&frets, search.string_count());
+    let profile = state.fret_profile();
     if profile.active_count == 0 {
         return None;
     }
 
-    let non_open = profile.non_open();
-    if let (Some(min), Some(max)) = (non_open.iter().min(), non_open.iter().max())
-        && max.saturating_sub(*min) > search.options.max_span
+    if let Some(span) = profile.fret_span()
+        && span > search.options.max_span
     {
         return None;
     }
 
-    let mut current = PitchSet::empty();
-    let mut actual_bass = None;
-    let mut actual_bass_pitch = i16::MAX;
-
-    for (string, fret) in frets.iter().take(search.string_count()).enumerate() {
-        let Some(fret) = fret else {
-            continue;
-        };
-        let absolute_pitch = search.tuning.absolute_pitch(string, *fret);
-        let pitch = PitchClass::new(absolute_pitch);
-        current.insert(pitch);
-        if absolute_pitch < actual_bass_pitch {
-            actual_bass_pitch = absolute_pitch;
-            actual_bass = Some(pitch);
-        }
-    }
+    let current = state.pitch_set;
+    let actual_bass = state.lowest_pitch.map(|(_, pitch)| pitch);
 
     let missing_required = search.target.difference(current);
     if missing_required
@@ -934,13 +1081,14 @@ fn build_voicing_candidate(
         return None;
     }
 
-    let score = voicing_score(
+    let score = voicing_score_with_profile(
         &frets,
-        &search.tuning,
+        search.tuning,
         search.bass_rule,
         search.formula,
         &omissions,
         search.string_count(),
+        &profile,
     );
     Some(VoicingCandidate {
         frets,
@@ -977,8 +1125,11 @@ fn materialize_voicing(candidate: VoicingCandidate, search: &VoicingSearch<'_>) 
     }
 }
 
-fn omission_strings(omissions: &InlineVec<u8, MAX_OMISSIONS>) -> Vec<String> {
-    omissions.iter().map(|degree| degree.to_string()).collect()
+fn omission_strings(omissions: &InlineVec<InferredOmission, MAX_OMISSIONS>) -> Vec<String> {
+    omissions
+        .iter()
+        .map(|omission| omission.degree().to_string())
+        .collect()
 }
 
 fn voicing_notes(

@@ -3,6 +3,7 @@ use std::fmt::{self, Write as _};
 
 use serde::{Serialize, Serializer, ser::SerializeStruct};
 
+use crate::inline_vec::InlineVec;
 use crate::parse::{normalize_chart_glyphs, parse_note_prefix};
 use crate::{
     ChordsmithError, GUITAR_STRING_COUNT, GUITAR7_STRING_COUNT, GUITAR8_STRING_COUNT,
@@ -518,10 +519,6 @@ impl Tuning {
         &self.notes[..self.string_count]
     }
 
-    pub(crate) const fn note(&self, string: usize) -> NoteName {
-        self.notes[string]
-    }
-
     pub(crate) const fn absolute_pitch(&self, string: usize, fret: u8) -> i16 {
         self.open_pitches[string] + fret as i16
     }
@@ -1006,7 +1003,7 @@ const fn is_supported_string_count(count: usize) -> bool {
     )
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct PlayedNote {
     pub string: usize,
     pub fret: u8,
@@ -1015,14 +1012,17 @@ pub struct PlayedNote {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PlayedFingering {
-    pub(crate) notes: Vec<PlayedNote>,
+pub(crate) struct PlayedFingeringCore {
+    pub(crate) notes: InlineVec<PlayedNote, MAX_STRING_COUNT>,
     pub(crate) set: PitchSet,
     pub(crate) bass: Option<PitchClass>,
 }
 
-pub(crate) fn play_fingering(fingering: &Fingering, tuning: GuitarTuning) -> PlayedFingering {
-    let mut notes = Vec::new();
+pub(crate) fn play_fingering_core(
+    fingering: &Fingering,
+    tuning: &GuitarTuning,
+) -> PlayedFingeringCore {
+    let mut notes = InlineVec::default();
     let mut set = PitchSet::empty();
     let mut bass = None;
     let mut bass_pitch = i16::MAX;
@@ -1039,7 +1039,7 @@ pub(crate) fn play_fingering(fingering: &Fingering, tuning: GuitarTuning) -> Pla
             bass = Some(pitch);
         }
         let note = NoteName::simple_for_pitch(pitch, false);
-        notes.push(PlayedNote {
+        let _ = notes.push(PlayedNote {
             string,
             fret: *fret,
             note,
@@ -1047,5 +1047,5 @@ pub(crate) fn play_fingering(fingering: &Fingering, tuning: GuitarTuning) -> Pla
         });
     }
 
-    PlayedFingering { notes, set, bass }
+    PlayedFingeringCore { notes, set, bass }
 }

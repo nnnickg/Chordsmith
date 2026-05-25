@@ -37,7 +37,7 @@ Voicings are generated from:
 There is no built-in `C = x32010` style table.
 
 Generated voicings use the same omitted-tone rules as identification: the root
-may be omitted from four-or-more-tone chords, the third from three-or-more-tone
+may be omitted from four-or-more-tone chords, the third from seventh-or-richer
 chords, and the fifth when musically redundant. Those omissions are included in
 structured output and printed in the text table when present.
 

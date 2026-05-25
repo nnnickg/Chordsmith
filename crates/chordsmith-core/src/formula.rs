@@ -33,6 +33,14 @@ impl IntervalName {
     pub(crate) fn is_natural_fifth(self) -> bool {
         self.degree == 5 && self.semitones == natural_semitones(5)
     }
+
+    pub(crate) const fn degree(self) -> u8 {
+        self.degree
+    }
+
+    pub(crate) fn accidental_delta(self) -> i16 {
+        self.semitones - natural_semitones(self.degree)
+    }
 }
 
 impl fmt::Display for IntervalName {
@@ -234,7 +242,7 @@ fn base_raw_tones(spec: &ChordSpec) -> InlineVec<RawTone, MAX_FORMULA_TONES> {
 fn normalize_raw_tones(
     mut raw: InlineVec<RawTone, MAX_FORMULA_TONES>,
 ) -> InlineVec<RawTone, MAX_FORMULA_TONES> {
-    raw.sort_by_key(|tone| (degree_order(tone.degree), tone.semitones));
+    raw.sort_unstable_by_key(|tone| (degree_order(tone.degree), tone.semitones));
     raw.dedup();
     raw
 }

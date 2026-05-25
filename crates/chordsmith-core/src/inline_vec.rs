@@ -71,8 +71,8 @@ impl<T: Ord, const N: usize> InlineVec<T, N> {
 }
 
 impl<T, const N: usize> InlineVec<T, N> {
-    pub(crate) fn sort_by_key<K: Ord>(&mut self, key: impl FnMut(&T) -> K) {
-        self.as_mut_slice().sort_by_key(key);
+    pub(crate) fn sort_unstable_by_key<K: Ord>(&mut self, key: impl FnMut(&T) -> K) {
+        self.as_mut_slice().sort_unstable_by_key(key);
     }
 }
 

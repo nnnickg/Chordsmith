@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use super::*;
+use crate::identify::InferredOmission;
 use crate::inline_vec::InlineVec;
 use crate::scoring::rank_diverse_voicing_candidates;
 use crate::symbol::MAX_OMISSIONS;
@@ -32,10 +33,16 @@ fn candidates_from_voicings(voicings: &[Voicing]) -> Vec<VoicingCandidate> {
         .collect()
 }
 
-fn omission_degrees(omissions: &[String]) -> InlineVec<u8, MAX_OMISSIONS> {
+fn omission_degrees(omissions: &[String]) -> InlineVec<InferredOmission, MAX_OMISSIONS> {
     let mut out = InlineVec::default();
     for omission in omissions {
-        let _ = out.push(omission.parse().expect("omission degree"));
+        let omission = match omission.as_str() {
+            "1" => InferredOmission::Root,
+            "3" => InferredOmission::Third,
+            "5" => InferredOmission::Fifth,
+            other => panic!("unexpected omission degree {other}"),
+        };
+        let _ = out.push(omission);
     }
     out
 }
@@ -1421,6 +1428,10 @@ fn automatically_generates_rootless_voicings_for_extended_chords() {
         shape.omissions.iter().map(String::as_str).eq(["1"])
             && shape.notes.iter().all(|note| note != "C")
     }));
+    assert!(shapes.iter().any(|shape| {
+        shape.omissions.iter().map(String::as_str).eq(["3"])
+            && shape.notes.iter().all(|note| note != "E")
+    }));
 }
 
 #[test]
@@ -1471,6 +1482,7 @@ fn infers_rootless_and_no_third_omitted_analyses() {
     assert!(aliases.contains(&"Cmaj7no1/E"));
 
     assert_eq!(primary("x353xx"), "C7no3");
+    assert_eq!(primary("x354xx"), "Cmaj7no3");
 }
 
 #[test]
