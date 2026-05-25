@@ -73,8 +73,12 @@ impl ChordFormula {
     }
 
     pub(crate) fn from_parts(root: NoteName, spec: &ChordSpec) -> Self {
+        Self::from_raw_parts(root, &raw_tones_from_spec(spec))
+    }
+
+    pub(crate) fn from_raw_parts(root: NoteName, raw_tones: &[RawTone]) -> Self {
         let mut tones = InlineVec::default();
-        for tone in &raw_tones_from_spec(spec) {
+        for tone in raw_tones {
             let pitch = root.pitch_class().transpose(tone.semitones);
             let letter = root.letter.advance(degree_letter_steps(tone.degree));
             let note = NoteName::spell_for_pitch(letter, pitch);
@@ -115,7 +119,7 @@ impl ChordFormula {
     }
 }
 
-fn raw_tones_from_spec(spec: &ChordSpec) -> InlineVec<RawTone, MAX_FORMULA_TONES> {
+pub(crate) fn raw_tones_from_spec(spec: &ChordSpec) -> InlineVec<RawTone, MAX_FORMULA_TONES> {
     let mut raw = raw_tones_without_omissions(spec);
 
     for omission in &spec.omissions {

@@ -231,8 +231,6 @@ struct RankedVoicingCandidate {
     family: VoicingFamily,
     position_tie_break: u8,
     active_count: usize,
-    compact_key: [u8; 32],
-    compact_key_len: usize,
 }
 
 impl RankedVoicingCandidate {
@@ -240,15 +238,11 @@ impl RankedVoicingCandidate {
         let profile = fret_profile(&candidate.frets, candidate.string_count);
         let family = voicing_family(&candidate.frets, candidate.string_count, &profile);
         let position_tie_break = voicing_position_tie_break(candidate.string_count, &profile);
-        let (compact_key, compact_key_len) =
-            fingering_compact_key(&candidate.frets, candidate.string_count);
         Self {
             candidate,
             family,
             position_tie_break,
             active_count: profile.active_count,
-            compact_key,
-            compact_key_len,
         }
     }
 
@@ -266,10 +260,18 @@ fn compare_ranked_voicing_candidates(
         .cmp(&right.candidate.score)
         .then(left.position_tie_break.cmp(&right.position_tie_break))
         .then_with(|| right.active_count.cmp(&left.active_count))
-        .then_with(|| {
-            left.compact_key[..left.compact_key_len]
-                .cmp(&right.compact_key[..right.compact_key_len])
-        })
+        .then_with(|| compare_fingering_compact(left, right))
+}
+
+fn compare_fingering_compact(
+    left: &RankedVoicingCandidate,
+    right: &RankedVoicingCandidate,
+) -> std::cmp::Ordering {
+    let (left_key, left_len) =
+        fingering_compact_key(&left.candidate.frets, left.candidate.string_count);
+    let (right_key, right_len) =
+        fingering_compact_key(&right.candidate.frets, right.candidate.string_count);
+    left_key[..left_len].cmp(&right_key[..right_len])
 }
 
 fn voicing_position_tie_break(string_count: usize, profile: &FretProfile) -> u8 {
@@ -1173,9 +1175,10 @@ fn estimated_finger_count(frets: &[Option<u8>; MAX_STRING_COUNT], string_count: 
     }
 
     let mut covered = [false; MAX_STRING_COUNT];
+    let mut barre_blocked = [false; MAX_STRING_COUNT];
     let mut barre_count = 0;
 
-    while let Some(barre) = best_barre(frets, &covered, string_count) {
+    while let Some(barre) = best_barre(frets, &covered, &barre_blocked, string_count) {
         barre_count += 1;
         for (string, fret) in frets
             .iter()
@@ -1185,6 +1188,15 @@ fn estimated_finger_count(frets: &[Option<u8>; MAX_STRING_COUNT], string_count: 
         {
             if *fret == Some(barre.fret) {
                 covered[string] = true;
+            }
+        }
+        if barre.bridged_mute {
+            for blocked in barre_blocked
+                .iter_mut()
+                .take(barre.end + 1)
+                .skip(barre.start)
+            {
+                *blocked = true;
             }
         }
     }
@@ -1199,11 +1211,13 @@ struct BarreCandidate {
     start: usize,
     end: usize,
     saving: usize,
+    bridged_mute: bool,
 }
 
 fn best_barre(
     frets: &[Option<u8>; MAX_STRING_COUNT],
     covered: &[bool; MAX_STRING_COUNT],
+    barre_blocked: &[bool; MAX_STRING_COUNT],
     string_count: usize,
 ) -> Option<BarreCandidate> {
     let mut best = None;
@@ -1215,23 +1229,23 @@ fn best_barre(
             unique_count += 1;
         }
     }
-    unique_frets[..unique_count].sort_unstable();
-
     for &fret in &unique_frets[..unique_count] {
         for start in 0..string_count {
-            if frets[start] != Some(fret) || covered[start] {
+            if frets[start] != Some(fret) || covered[start] || barre_blocked[start] {
                 continue;
             }
             for end in (start + 1)..string_count {
-                if frets[end] != Some(fret) || covered[end] {
+                if frets[end] != Some(fret) || covered[end] || barre_blocked[end] {
                     continue;
                 }
-                if !barre_range_valid(frets, fret, start, end) {
+                let Some(range) = barre_range(frets, fret, start, end) else {
                     continue;
-                }
+                };
 
                 let exact_count = (start..=end)
-                    .filter(|string| frets[*string] == Some(fret) && !covered[*string])
+                    .filter(|string| {
+                        frets[*string] == Some(fret) && !covered[*string] && !barre_blocked[*string]
+                    })
                     .count();
                 if exact_count < 2 {
                     continue;
@@ -1242,6 +1256,7 @@ fn best_barre(
                     start,
                     end,
                     saving: exact_count - 1,
+                    bridged_mute: range.bridged_mute,
                 };
                 if best.is_none_or(|current: BarreCandidate| {
                     candidate
@@ -1259,13 +1274,39 @@ fn best_barre(
     best
 }
 
-fn barre_range_valid(
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct BarreRange {
+    bridged_mute: bool,
+}
+
+fn barre_range(
     frets: &[Option<u8>; MAX_STRING_COUNT],
     fret: u8,
     start: usize,
     end: usize,
-) -> bool {
-    (start..=end).all(|string| frets[string].is_some_and(|value| value >= fret))
+) -> Option<BarreRange> {
+    let mut exact_count = 0usize;
+    let mut higher_count = 0usize;
+    let mut muted_count = 0usize;
+
+    for value in frets.iter().take(end + 1).skip(start) {
+        match value {
+            Some(value) if *value == fret => exact_count += 1,
+            Some(value) if *value > fret => higher_count += 1,
+            Some(_) => return None,
+            None => muted_count += 1,
+        }
+    }
+
+    if muted_count == 0 {
+        Some(BarreRange {
+            bridged_mute: false,
+        })
+    } else if exact_count >= 3 && higher_count > 0 && muted_count <= exact_count {
+        Some(BarreRange { bridged_mute: true })
+    } else {
+        None
+    }
 }
 
 fn dense_open_bass_grip(frets: &[Option<u8>; MAX_STRING_COUNT], string_count: usize) -> bool {
@@ -1623,4 +1664,32 @@ fn internal_mutes(frets: &[Option<u8>; MAX_STRING_COUNT], string_count: usize) -
     };
     let count = (first..=last).filter(|idx| frets[*idx].is_none()).count();
     u32::try_from(count).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frets(values: &[Option<u8>]) -> [Option<u8>; MAX_STRING_COUNT] {
+        let mut out = [None; MAX_STRING_COUNT];
+        for (idx, value) in values.iter().copied().enumerate() {
+            out[idx] = value;
+        }
+        out
+    }
+
+    #[test]
+    fn finger_estimate_allows_real_barres_across_muted_strings() {
+        let f_with_muted_g = frets(&[Some(1), Some(3), Some(3), None, Some(1), Some(1)]);
+        assert_eq!(estimated_finger_count(&f_with_muted_g, 6), 3);
+
+        let partial_f_with_muted_g = frets(&[Some(1), Some(3), Some(1), None, Some(1), Some(1)]);
+        assert_eq!(estimated_finger_count(&partial_f_with_muted_g, 6), 2);
+    }
+
+    #[test]
+    fn finger_estimate_does_not_treat_sparse_endpoints_as_a_barre() {
+        let sparse = frets(&[Some(1), None, None, None, None, Some(1)]);
+        assert_eq!(estimated_finger_count(&sparse, 6), 2);
+    }
 }

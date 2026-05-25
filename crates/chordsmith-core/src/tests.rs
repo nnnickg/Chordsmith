@@ -359,13 +359,24 @@ fn golden_ukulele_default_voicings_start_with_musician_grips() {
 
 #[test]
 fn golden_extended_dominant_shapes_identify_as_requested_family() {
+    assert_eq!(primary("x32330"), "C9");
     assert_eq!(primary("878788"), "C9");
     assert_eq!(primary("x32323"), "C7b9");
+    assert_eq!(primary("x6466x"), "Ebm9");
 }
 
 #[test]
 fn golden_ukulele_context_voicings_remain_useful_aliases() {
     let uke = Instrument::Ukulele.default_tuning();
+
+    assert_eq!(
+        identify_with_tuning("3203", uke)
+            .unwrap()
+            .primary
+            .expect("C9 uke primary")
+            .symbol,
+        "C9"
+    );
 
     let rootless_c13 = identify_with_tuning("2201", uke).unwrap();
     assert_eq!(
@@ -1093,19 +1104,24 @@ fn generated_non_chord_slash_voicings_identify_back_as_primary() {
 
 #[test]
 fn inferred_omissions_do_not_create_single_pitch_chords() {
-    for fingering in ["x3xxxx", "x3x5xx", "xx0x1x"] {
+    for fingering in ["x3xxxx", "x3x5xx"] {
         let result = identify(fingering).unwrap();
-        let symbols = result
-            .primary
-            .iter()
-            .chain(result.aliases.iter())
-            .map(|analysis| analysis.symbol.as_str())
-            .collect::<Vec<_>>();
-        assert!(
-            symbols.iter().all(|symbol| !symbol.starts_with("C5no5")),
-            "{fingering}: {symbols:?}"
-        );
+        assert_eq!(result.primary, None, "{fingering}: {result:?}");
+        assert!(result.aliases.is_empty(), "{fingering}: {result:?}");
     }
+
+    let fingering = "xx0x1x";
+    let result = identify(fingering).unwrap();
+    let symbols = result
+        .primary
+        .iter()
+        .chain(result.aliases.iter())
+        .map(|analysis| analysis.symbol.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        symbols.iter().all(|symbol| !symbol.starts_with("C5no5")),
+        "{fingering}: {symbols:?}"
+    );
 
     let shapes = voicings(
         "C",

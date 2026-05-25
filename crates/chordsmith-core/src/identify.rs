@@ -5,7 +5,9 @@ use std::sync::OnceLock;
 
 use serde::Serialize;
 
-use crate::formula::{ChordFormula, ChordTone, has_omitted_alteration, has_redundant_alteration};
+use crate::formula::{
+    ChordFormula, ChordTone, has_omitted_alteration, has_redundant_alteration, raw_tones_from_spec,
+};
 use crate::inline_vec::InlineVec;
 use crate::notes::{
     Fingering, GuitarTuning, NoteLetter, NoteName, PitchClass, PitchSet, PlayedNote,
@@ -100,6 +102,15 @@ pub fn identify_fingering_with_tuning(
         });
     };
 
+    if played.set.len() < 2 {
+        return Ok(IdentifyResult {
+            fingering: fingering.compact(),
+            notes: played.notes,
+            primary: None,
+            aliases: Vec::new(),
+        });
+    }
+
     let show_chord_tone_bass = tuning.prefers_root_bass();
     let store: &'static CandidateStore = candidate_store();
     let mut candidates: Vec<AnalysisCandidate<'static>> = Vec::new();
@@ -129,6 +140,21 @@ pub fn identify_fingering_with_tuning(
     };
     store.for_each_superset_match(played_without_bass, |candidate| {
         if candidate.formula_set.contains(bass) {
+            if candidate.formula_set == played.set {
+                return;
+            }
+
+            let missing = candidate.formula_set.difference(played.set);
+            if let Some(omissions) = inferred_omission_degrees(missing, &candidate.formula) {
+                candidates.push(AnalysisCandidate::new(
+                    candidate,
+                    bass,
+                    omissions,
+                    true,
+                    show_chord_tone_bass,
+                    false,
+                ));
+            }
             return;
         }
 
@@ -149,24 +175,6 @@ pub fn identify_fingering_with_tuning(
         if let Some(omissions) = inferred_omission_degrees(missing, &candidate.formula) {
             candidates.push(AnalysisCandidate::new(
                 candidate, bass, omissions, true, true, true,
-            ));
-        }
-    });
-
-    store.for_each_superset_match(played.set, |candidate| {
-        if candidate.formula_set == played.set {
-            return;
-        }
-
-        let missing = candidate.formula_set.difference(played.set);
-        if let Some(omissions) = inferred_omission_degrees(missing, &candidate.formula) {
-            candidates.push(AnalysisCandidate::new(
-                candidate,
-                bass,
-                omissions,
-                true,
-                show_chord_tone_bass,
-                false,
             ));
         }
     });
@@ -374,9 +382,10 @@ impl Iterator for BoundedSupersetKeys {
 
 fn build_candidate_records() -> Vec<CandidateRecord> {
     let mut records = Vec::new();
-    for root in candidate_root_spellings() {
-        for spec in candidate_specs() {
-            let formula = ChordFormula::from_parts(*root, spec);
+    for spec in candidate_specs() {
+        let raw_tones = raw_tones_from_spec(spec);
+        for root in candidate_root_spellings() {
+            let formula = ChordFormula::from_raw_parts(*root, &raw_tones);
             if formula.has_duplicate_pitch_classes() {
                 continue;
             }
@@ -720,6 +729,9 @@ impl<'a> AnalysisCandidate<'a> {
         for omission in &omissions {
             score += omission_score(*omission, formula);
         }
+        score = score.saturating_sub(rooted_extension_omitted_fifth_bonus(
+            formula, omitted, &omissions, slash_bass,
+        ));
         score = score.saturating_sub(contextual_omission_adjustment(formula, &omissions));
 
         if slash_bass {
@@ -976,6 +988,29 @@ fn omission_score(omission: u8, formula: &ChordFormula) -> u32 {
             }
         }
         _ => 200,
+    }
+}
+
+fn rooted_extension_omitted_fifth_bonus(
+    formula: &ChordFormula,
+    omitted: bool,
+    omissions: &[u8],
+    slash_bass: bool,
+) -> u32 {
+    if !slash_bass
+        && omitted
+        && omissions == [5]
+        && formula.tones.iter().any(|tone| tone.degree == 3)
+        && formula.tones.iter().any(|tone| tone.degree == 7)
+        && formula
+            .tones
+            .iter()
+            .any(|tone| matches!(tone.degree, 9 | 13))
+        && !formula_has_altered_fifth(formula)
+    {
+        160
+    } else {
+        0
     }
 }
 
