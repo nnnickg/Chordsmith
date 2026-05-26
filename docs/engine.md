@@ -17,6 +17,9 @@
   chord tone, voicing generation searches the chord tones plus that bass pitch.
 - Chord names are ranked analyses, not a single mathematical truth. The same
   pitch-class set can have multiple valid names.
+- Identification candidate records and pitch-set indexes are generated at build
+  time from the theory rules. Runtime lookup does not build a process-local
+  candidate cache.
 - Parsed note names allow natural, single, and double accidentals. Opposite
   accidentals stop root parsing so `C#b5` means `C#` plus `b5`, while bare
   invalid spellings such as `C#b` are rejected.

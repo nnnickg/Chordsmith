@@ -801,10 +801,6 @@ impl PitchSet {
         Self { bits: 0 }
     }
 
-    pub(crate) const fn all() -> Self {
-        Self { bits: 0x0fff }
-    }
-
     pub(crate) fn insert(&mut self, pitch: PitchClass) {
         self.bits |= 1u16 << pitch.value();
     }

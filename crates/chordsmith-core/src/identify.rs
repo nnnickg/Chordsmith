@@ -1,25 +1,18 @@
-use std::array;
 use std::cmp::Ordering;
 use std::fmt::Write as _;
-use std::sync::OnceLock;
 
 use serde::Serialize;
 
-use crate::formula::{
-    ChordFormula, ChordTone, has_omitted_alteration, has_redundant_alteration, raw_tones_from_spec,
-};
+use crate::candidate_record::{CandidateFormulaSummary, CandidateRecord, CandidateToneSummary};
+use crate::formula::{ChordFormula, ChordTone, natural_semitones};
 use crate::inline_vec::InlineVec;
 use crate::notes::{
-    Fingering, GuitarTuning, NoteLetter, NoteName, PitchClass, PitchSet, PlayedFingeringCore,
-    PlayedNote, STANDARD_TUNING, play_fingering_core,
+    Fingering, GuitarTuning, NoteName, PitchClass, PitchSet, PlayedFingeringCore, PlayedNote,
+    STANDARD_TUNING, play_fingering_core,
 };
-use crate::parse::{push_unique, validate_descriptor};
-use crate::symbol::{
-    Alteration, ChordSpec, Extension, MAX_ALTERATIONS, MAX_OMISSIONS, Quality, Seventh,
-};
+use crate::symbol::{Alteration, ChordSpec, Extension, MAX_OMISSIONS, Quality, Seventh};
 use crate::{ChordsmithError, MAX_NOTE_ACCIDENTALS};
 
-const PITCH_SET_KEY_COUNT: usize = 1 << 12;
 const MAX_IDENTIFY_ANALYSES: usize = 25;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -140,7 +133,11 @@ fn identify_core(
             }
 
             let missing = candidate.formula_set.difference(played.set);
-            if let Some(omissions) = inferred_omission_degrees(missing, &candidate.formula) {
+            if let Some(omissions) = inferred_omission_degrees_from_summary(
+                missing,
+                candidate.summary,
+                candidate.formula_set,
+            ) {
                 candidates.consider(AnalysisCandidate::new(
                     candidate,
                     bass,
@@ -167,7 +164,11 @@ fn identify_core(
         }
 
         let missing = candidate.formula_set.difference(played.set);
-        if let Some(omissions) = inferred_omission_degrees(missing, &candidate.formula) {
+        if let Some(omissions) = inferred_omission_degrees_from_summary(
+            missing,
+            candidate.summary,
+            candidate.formula_set,
+        ) {
             candidates.consider(AnalysisCandidate::new(
                 candidate, bass, omissions, true, true, true,
             ));
@@ -216,26 +217,24 @@ fn materialize_identify_result(
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct CandidateRecord {
-    root: NoteName,
-    spec: ChordSpec,
-    formula: ChordFormula,
-    formula_set: PitchSet,
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/identify_candidate_data.rs"));
 }
 
 struct CandidateStore {
-    records: Vec<CandidateRecord>,
-    exact: [Vec<usize>; PITCH_SET_KEY_COUNT],
-    superset_offsets: [usize; PITCH_SET_KEY_COUNT + 1],
-    superset_indices: Vec<usize>,
+    records: &'static [CandidateRecord],
+    exact_offsets: &'static [usize],
+    exact_indices: &'static [u16],
+    superset_offsets: &'static [usize],
+    superset_indices: &'static [u16],
 }
 
 impl CandidateStore {
     fn exact_matches(&self, set: PitchSet) -> impl Iterator<Item = &CandidateRecord> {
-        self.exact[usize::from(set.bits)]
+        let key = usize::from(set.bits);
+        self.exact_indices[self.exact_offsets[key]..self.exact_offsets[key + 1]]
             .iter()
-            .map(|idx| &self.records[*idx])
+            .map(|idx| &self.records[usize::from(*idx)])
     }
 
     fn for_each_superset_match<'a>(
@@ -247,139 +246,60 @@ impl CandidateStore {
         for idx in
             &self.superset_indices[self.superset_offsets[key]..self.superset_offsets[key + 1]]
         {
-            handle(&self.records[*idx]);
+            handle(&self.records[usize::from(*idx)]);
         }
     }
 }
+
+static CANDIDATE_STORE: CandidateStore = CandidateStore {
+    records: &generated::CANDIDATE_RECORDS,
+    exact_offsets: &generated::EXACT_OFFSETS,
+    exact_indices: &generated::EXACT_INDICES,
+    superset_offsets: &generated::SUPERSET_OFFSETS,
+    superset_indices: &generated::SUPERSET_INDICES,
+};
 
 fn candidate_store() -> &'static CandidateStore {
-    static CANDIDATE_STORE: OnceLock<CandidateStore> = OnceLock::new();
-    CANDIDATE_STORE.get_or_init(build_candidate_store)
+    &CANDIDATE_STORE
 }
 
-fn build_candidate_store() -> CandidateStore {
-    let records = build_candidate_records();
-    let mut exact_counts = [0usize; PITCH_SET_KEY_COUNT];
-    let mut superset_counts = [0usize; PITCH_SET_KEY_COUNT];
+#[cfg(test)]
+mod generated_candidate_data_tests {
+    use super::generated;
+    use crate::candidate_data_builder::{build_candidate_indices, build_candidate_records};
 
-    for record in &records {
-        exact_counts[usize::from(record.formula_set.bits)] += 1;
-        for_each_subset(record.formula_set, |subset| {
-            superset_counts[usize::from(subset.bits)] += 1;
-        });
-    }
+    #[test]
+    fn generated_candidate_data_matches_builder() {
+        let records = build_candidate_records();
+        let indices = build_candidate_indices(&records);
 
-    let mut exact = array::from_fn(|idx| Vec::with_capacity(exact_counts[idx]));
-    let superset_offsets = prefix_offsets(&superset_counts);
-    let mut superset_indices = vec![0usize; superset_offsets[PITCH_SET_KEY_COUNT]];
-    let mut superset_write_offsets = superset_offsets;
-
-    for (idx, record) in records.iter().enumerate() {
-        exact[usize::from(record.formula_set.bits)].push(idx);
-        for_each_subset(record.formula_set, |subset| {
-            let key = usize::from(subset.bits);
-            let write_idx = superset_write_offsets[key];
-            superset_indices[write_idx] = idx;
-            superset_write_offsets[key] += 1;
-        });
-    }
-
-    CandidateStore {
-        records,
-        exact,
-        superset_offsets,
-        superset_indices,
-    }
-}
-
-fn prefix_offsets(counts: &[usize; PITCH_SET_KEY_COUNT]) -> [usize; PITCH_SET_KEY_COUNT + 1] {
-    let mut offsets = [0usize; PITCH_SET_KEY_COUNT + 1];
-    let mut idx = 0;
-    while idx < PITCH_SET_KEY_COUNT {
-        offsets[idx + 1] = offsets[idx] + counts[idx];
-        idx += 1;
-    }
-    offsets
-}
-
-fn for_each_subset(formula_set: PitchSet, mut handle: impl FnMut(PitchSet)) {
-    let mut subset = formula_set.bits;
-    loop {
-        handle(PitchSet { bits: subset });
-        if subset == 0 {
-            break;
-        }
-        subset = subset.wrapping_sub(1) & formula_set.bits;
-    }
-}
-
-fn build_candidate_records() -> Vec<CandidateRecord> {
-    let mut records = Vec::new();
-    for spec in candidate_specs() {
-        let raw_tones = raw_tones_from_spec(spec);
-        for root in candidate_root_spellings() {
-            let formula = ChordFormula::from_raw_parts(*root, &raw_tones);
-            if formula.has_duplicate_pitch_classes() {
-                continue;
-            }
-            if formula.has_spelling_outside_double_accidentals() {
-                continue;
-            }
-            records.push(CandidateRecord {
-                root: *root,
-                spec: spec.clone(),
-                formula_set: formula.pitch_set(),
-                formula,
-            });
-        }
-    }
-    records
-}
-
-fn candidate_root_spellings() -> &'static [NoteName] {
-    static CANDIDATE_ROOTS: OnceLock<Vec<NoteName>> = OnceLock::new();
-    CANDIDATE_ROOTS
-        .get_or_init(build_candidate_root_spellings)
-        .as_slice()
-}
-
-fn build_candidate_root_spellings() -> Vec<NoteName> {
-    let mut roots = Vec::new();
-    for pitch in PitchSet::all().iter() {
-        push_candidate_spellings(&mut roots, pitch);
-    }
-    roots
-}
-
-fn push_candidate_spellings(notes: &mut Vec<NoteName>, pitch: PitchClass) {
-    let flat = NoteName::simple_for_pitch(pitch, true);
-    let sharp = NoteName::simple_for_pitch(pitch, false);
-    if prefer_flat_pitch(pitch) {
-        push_unique_note(notes, flat);
-        push_unique_note(notes, sharp);
-    } else {
-        push_unique_note(notes, sharp);
-        push_unique_note(notes, flat);
-    }
-
-    if let Some(edge) = edge_spelling_for_pitch(pitch) {
-        push_unique_note(notes, edge);
-    }
-}
-
-fn edge_spelling_for_pitch(pitch: PitchClass) -> Option<NoteName> {
-    match pitch.value() {
-        0 => Some(NoteName::const_new(NoteLetter::B, 1)),
-        4 => Some(NoteName::const_new(NoteLetter::F, -1)),
-        5 => Some(NoteName::const_new(NoteLetter::E, 1)),
-        11 => Some(NoteName::const_new(NoteLetter::C, -1)),
-        _ => None,
-    }
-}
-
-fn push_unique_note(notes: &mut Vec<NoteName>, note: NoteName) {
-    if !notes.contains(&note) {
-        notes.push(note);
+        assert_eq!(generated::CANDIDATE_RECORDS.as_slice(), records.as_slice());
+        assert_eq!(
+            generated::EXACT_OFFSETS.as_slice(),
+            indices.exact_offsets.as_slice()
+        );
+        assert_eq!(
+            generated::EXACT_INDICES.as_slice(),
+            indices
+                .exact_indices
+                .iter()
+                .map(|idx| *idx as u16)
+                .collect::<Vec<_>>()
+                .as_slice()
+        );
+        assert_eq!(
+            generated::SUPERSET_OFFSETS.as_slice(),
+            indices.superset_offsets.as_slice()
+        );
+        assert_eq!(
+            generated::SUPERSET_INDICES.as_slice(),
+            indices
+                .superset_indices
+                .iter()
+                .map(|idx| *idx as u16)
+                .collect::<Vec<_>>()
+                .as_slice()
+        );
     }
 }
 
@@ -407,171 +327,6 @@ fn respell_played_notes(
             respelled
         })
         .collect()
-}
-
-fn candidate_specs() -> &'static [ChordSpec] {
-    static CANDIDATE_SPECS: OnceLock<Vec<ChordSpec>> = OnceLock::new();
-    CANDIDATE_SPECS
-        .get_or_init(build_candidate_specs)
-        .as_slice()
-}
-
-fn build_candidate_specs() -> Vec<ChordSpec> {
-    let mut specs = Vec::new();
-    for quality in [
-        Quality::Major,
-        Quality::Minor,
-        Quality::Diminished,
-        Quality::Augmented,
-        Quality::Sus2,
-        Quality::Sus4,
-        Quality::Power,
-    ] {
-        let base = ChordSpec {
-            quality,
-            ..ChordSpec::default()
-        };
-        specs.push(base.clone());
-
-        if quality == Quality::Power {
-            continue;
-        }
-
-        if quality == Quality::Major {
-            specs.push(ChordSpec {
-                alt: true,
-                ..ChordSpec::default()
-            });
-        }
-
-        for add in [9u8, 11, 13] {
-            let mut spec = base.clone();
-            push_unique(&mut spec.adds, add);
-            specs.push(spec);
-        }
-
-        if matches!(quality, Quality::Major | Quality::Minor) {
-            let mut six = base.clone();
-            six.sixth = true;
-            specs.push(six.clone());
-            push_unique(&mut six.adds, 9);
-            specs.push(six);
-        }
-
-        for seventh in allowed_sevenths(quality) {
-            let mut seventh_spec = base.clone();
-            seventh_spec.seventh = *seventh;
-            specs.push(seventh_spec.clone());
-
-            for extension in [Extension::Ninth, Extension::Eleventh, Extension::Thirteenth] {
-                let mut extended = seventh_spec.clone();
-                extended.extension = Some(extension);
-                specs.push(extended.clone());
-                for altered in alteration_sets(Some(extension)) {
-                    let mut spec = extended.clone();
-                    spec.alterations = altered;
-                    specs.push(spec);
-                }
-            }
-
-            for altered in alteration_sets(None) {
-                let mut spec = seventh_spec.clone();
-                spec.alterations = altered;
-                specs.push(spec);
-            }
-        }
-    }
-
-    let mut half_dim = ChordSpec {
-        quality: Quality::Minor,
-        seventh: Seventh::Minor,
-        extension: None,
-        sixth: false,
-        alt: false,
-        adds: InlineVec::default(),
-        alterations: inline_alterations(&[Alteration {
-            degree: 5,
-            accidental: -1,
-        }]),
-        omissions: InlineVec::default(),
-    };
-    specs.push(half_dim.clone());
-    half_dim.extension = Some(Extension::Ninth);
-    specs.push(half_dim);
-
-    specs.retain(|spec| {
-        validate_descriptor(spec).is_ok()
-            && !has_redundant_alteration(spec)
-            && !has_omitted_alteration(spec)
-    });
-    specs.sort_unstable_by_key(ChordSpec::suffix);
-    specs.dedup_by(|left, right| left == right);
-    specs
-}
-
-fn allowed_sevenths(quality: Quality) -> &'static [Seventh] {
-    match quality {
-        Quality::Diminished => &[Seventh::Diminished],
-        Quality::Power => &[],
-        _ => &[Seventh::Minor, Seventh::Major],
-    }
-}
-
-fn alteration_sets(extension: Option<Extension>) -> Vec<InlineVec<Alteration, MAX_ALTERATIONS>> {
-    let blocked_degree = extension.map(crate::parse::extension_degree);
-    let alterations = [
-        Alteration {
-            degree: 5,
-            accidental: -1,
-        },
-        Alteration {
-            degree: 5,
-            accidental: 1,
-        },
-        Alteration {
-            degree: 9,
-            accidental: -1,
-        },
-        Alteration {
-            degree: 9,
-            accidental: 1,
-        },
-        Alteration {
-            degree: 11,
-            accidental: 1,
-        },
-        Alteration {
-            degree: 13,
-            accidental: -1,
-        },
-    ];
-
-    let mut options = Vec::new();
-    for mask in 0..(1usize << alterations.len()) {
-        let mut option = InlineVec::default();
-        let mut blocked = false;
-        for (idx, alteration) in alterations.iter().enumerate() {
-            if mask & (1usize << idx) != 0 {
-                if blocked_degree == Some(alteration.degree) {
-                    blocked = true;
-                    break;
-                }
-                let _ = option.push(*alteration);
-            }
-        }
-        if !blocked {
-            options.push(option);
-        }
-    }
-    options
-}
-
-fn inline_alterations(values: &[Alteration]) -> InlineVec<Alteration, MAX_ALTERATIONS> {
-    let mut out = InlineVec::default();
-    for value in values {
-        let _ = out.push(*value);
-    }
-    out
 }
 
 pub(crate) fn can_omit(missing: PitchSet, formula: &ChordFormula) -> bool {
@@ -605,6 +360,38 @@ pub(crate) fn inferred_omission_degrees(
     }
 
     if formula.pitch_set().difference(missing).len() < 2 {
+        return None;
+    }
+
+    Some(omissions)
+}
+
+fn inferred_omission_degrees_from_summary(
+    missing: PitchSet,
+    summary: CandidateFormulaSummary,
+    formula_set: PitchSet,
+) -> Option<InlineVec<InferredOmission, MAX_OMISSIONS>> {
+    if missing.is_empty() {
+        return Some(InlineVec::default());
+    }
+
+    let mut omissions = InlineVec::default();
+    for pitch in missing.iter() {
+        let tone = summary.tone_for_pitch(pitch)?;
+        if !can_infer_omission_from_summary(tone, summary) {
+            return None;
+        }
+        if summary.has_degree_not_in(tone.degree, missing) {
+            return None;
+        }
+        push_unique_omission(&mut omissions, InferredOmission::from_degree(tone.degree)?);
+    }
+
+    if omissions.is_empty() {
+        return None;
+    }
+
+    if formula_set.difference(missing).len() < 2 {
         return None;
     }
 
@@ -657,17 +444,29 @@ pub(crate) fn can_infer_omission(tone: &ChordTone, formula: &ChordFormula) -> bo
     }
 }
 
+fn can_infer_omission_from_summary(
+    tone: CandidateToneSummary,
+    summary: CandidateFormulaSummary,
+) -> bool {
+    match tone.degree {
+        1 => summary.tone_count >= 4,
+        3 => summary.tone_count >= 4 && summary_has_seventh(summary),
+        5 => tone.is_natural_fifth(),
+        _ => false,
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct BuiltAnalysis {
     analysis: ChordAnalysis,
     spellings: [Option<NoteName>; 12],
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct AnalysisCandidate<'a> {
     root: NoteName,
     spec: &'a ChordSpec,
-    formula: &'a ChordFormula,
+    summary: CandidateFormulaSummary,
     bass: PitchClass,
     omissions: InlineVec<InferredOmission, MAX_OMISSIONS>,
     omitted: bool,
@@ -687,18 +486,18 @@ impl<'a> AnalysisCandidate<'a> {
     ) -> Self {
         let root = record.root;
         let spec = &record.spec;
-        let formula = &record.formula;
-        let mut score = analysis_score(root, spec, formula, bass, omitted, show_chord_tone_bass);
+        let summary = record.summary;
+        let mut score = analysis_score(root, spec, summary, bass, omitted, show_chord_tone_bass);
         for omission in &omissions {
-            score += omission_score(*omission, formula);
+            score += omission_score(*omission, summary);
         }
         score = score.saturating_sub(rooted_extension_omitted_fifth_bonus(
-            formula, omitted, &omissions, slash_bass,
+            summary, omitted, &omissions, slash_bass,
         ));
         score = score.saturating_sub(rooted_seventh_omitted_third_bonus(
-            root, bass, formula, omitted, &omissions,
+            root, bass, summary, omitted, &omissions,
         ));
-        score = score.saturating_sub(contextual_omission_adjustment(formula, &omissions));
+        score = score.saturating_sub(contextual_omission_adjustment(summary, &omissions));
 
         if slash_bass {
             let interval = slash_bass_interval(root, bass);
@@ -717,7 +516,7 @@ impl<'a> AnalysisCandidate<'a> {
         Self {
             root,
             spec,
-            formula,
+            summary,
             bass,
             omissions,
             omitted,
@@ -727,12 +526,12 @@ impl<'a> AnalysisCandidate<'a> {
         }
     }
 
-    fn materialize(self) -> BuiltAnalysis {
+    fn materialize(&self) -> BuiltAnalysis {
         build_analysis(self)
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct AnalysisCandidateSet<'a> {
     items: [Option<AnalysisCandidate<'a>>; MAX_IDENTIFY_ANALYSES],
     len: usize,
@@ -741,7 +540,7 @@ struct AnalysisCandidateSet<'a> {
 impl Default for AnalysisCandidateSet<'_> {
     fn default() -> Self {
         Self {
-            items: [None; MAX_IDENTIFY_ANALYSES],
+            items: std::array::from_fn(|_| None),
             len: 0,
         }
     }
@@ -768,7 +567,8 @@ impl<'a> AnalysisCandidateSet<'a> {
             return;
         };
         if self.items[worst_idx]
-            .is_some_and(|worst| compare_analysis_candidates(&candidate, &worst).is_lt())
+            .as_ref()
+            .is_some_and(|worst| compare_analysis_candidates(&candidate, worst).is_lt())
         {
             self.items[worst_idx] = Some(candidate);
         }
@@ -776,14 +576,16 @@ impl<'a> AnalysisCandidateSet<'a> {
 
     fn worst_index(&self) -> Option<usize> {
         let mut worst: Option<usize> = None;
-        for (idx, candidate) in self.items.iter().copied().take(self.len).enumerate() {
-            let Some(candidate) = candidate else {
+        for (idx, candidate) in self.items.iter().take(self.len).enumerate() {
+            let Some(candidate) = candidate.as_ref() else {
                 continue;
             };
             if worst.is_none_or(|worst_idx| {
-                self.items[worst_idx].is_some_and(|worst_candidate| {
-                    compare_analysis_candidates(&candidate, &worst_candidate).is_gt()
-                })
+                self.items[worst_idx]
+                    .as_ref()
+                    .is_some_and(|worst_candidate| {
+                        compare_analysis_candidates(candidate, worst_candidate).is_gt()
+                    })
             }) {
                 worst = Some(idx);
             }
@@ -792,31 +594,27 @@ impl<'a> AnalysisCandidateSet<'a> {
     }
 
     fn sort(&mut self) {
-        for idx in 1..self.len {
-            let Some(candidate) = self.items[idx] else {
-                continue;
-            };
-            let mut pos = idx;
-            while pos > 0 {
-                let Some(previous) = self.items[pos - 1] else {
-                    break;
-                };
-                if !compare_analysis_candidates(&candidate, &previous).is_lt() {
-                    break;
-                }
-                self.items[pos] = Some(previous);
-                pos -= 1;
-            }
-            self.items[pos] = Some(candidate);
-        }
+        self.items[..self.len].sort_unstable_by(compare_candidate_slots);
     }
 
-    fn iter(&self) -> impl Iterator<Item = AnalysisCandidate<'a>> + '_ {
-        self.items.iter().copied().take(self.len).flatten()
+    fn iter(&self) -> impl Iterator<Item = &AnalysisCandidate<'a>> + '_ {
+        self.items.iter().take(self.len).filter_map(Option::as_ref)
     }
 
-    const fn len(self) -> usize {
+    const fn len(&self) -> usize {
         self.len
+    }
+}
+
+fn compare_candidate_slots(
+    left: &Option<AnalysisCandidate<'_>>,
+    right: &Option<AnalysisCandidate<'_>>,
+) -> Ordering {
+    match (left.as_ref(), right.as_ref()) {
+        (Some(left), Some(right)) => compare_analysis_candidates(left, right),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
     }
 }
 
@@ -882,14 +680,14 @@ fn compare_specs(left: &ChordSpec, right: &ChordSpec) -> Ordering {
         .then(left.omissions.as_slice().cmp(right.omissions.as_slice()))
 }
 
-fn build_analysis(candidate: AnalysisCandidate<'_>) -> BuiltAnalysis {
-    let bass_name = candidate
-        .formula
+fn build_analysis(candidate: &AnalysisCandidate<'_>) -> BuiltAnalysis {
+    let formula = ChordFormula::from_parts(candidate.root, candidate.spec);
+    let bass_name = formula
         .tone_for_pitch(candidate.bass)
         .map(|tone| tone.note)
         .unwrap_or_else(|| slash_bass_name(candidate.root, candidate.bass));
     let mut spellings = [None::<NoteName>; 12];
-    for tone in &candidate.formula.tones {
+    for tone in &formula.tones {
         spellings[usize::from(tone.pitch_class)] = Some(tone.note);
     }
     spellings[usize::from(candidate.bass.value())] = Some(bass_name);
@@ -915,14 +713,12 @@ fn build_analysis(candidate: AnalysisCandidate<'_>) -> BuiltAnalysis {
             symbol,
             root: candidate.root.to_string(),
             bass: bass_name.to_string(),
-            notes: candidate
-                .formula
+            notes: formula
                 .tones
                 .iter()
                 .map(|tone| tone.note.to_string())
                 .collect(),
-            intervals: candidate
-                .formula
+            intervals: formula
                 .tones
                 .iter()
                 .map(|tone| tone.interval.to_string())
@@ -1047,24 +843,24 @@ fn is_stable_alias_interval(interval: &str) -> bool {
     )
 }
 
-fn omission_score(omission: InferredOmission, formula: &ChordFormula) -> u32 {
+fn omission_score(omission: InferredOmission, summary: CandidateFormulaSummary) -> u32 {
     match omission {
         InferredOmission::Root => {
-            if formula_supports_rootless_upper_alias(formula) {
+            if summary_supports_rootless_upper_alias(summary) {
                 100
             } else {
                 500
             }
         }
         InferredOmission::Third => {
-            if formula.tones.len() == 4 && formula_has_intervals(formula, &["b7"]) {
+            if summary.tone_count == 4 && summary_has_intervals(summary, &["b7"]) {
                 420
             } else {
                 500
             }
         }
         InferredOmission::Fifth => {
-            if formula_has_upper_structure(formula) {
+            if summary.has_upper_structure() {
                 40
             } else {
                 80
@@ -1074,7 +870,7 @@ fn omission_score(omission: InferredOmission, formula: &ChordFormula) -> u32 {
 }
 
 fn rooted_extension_omitted_fifth_bonus(
-    formula: &ChordFormula,
+    summary: CandidateFormulaSummary,
     omitted: bool,
     omissions: &[InferredOmission],
     slash_bass: bool,
@@ -1082,13 +878,10 @@ fn rooted_extension_omitted_fifth_bonus(
     if !slash_bass
         && omitted
         && omissions == [InferredOmission::Fifth]
-        && formula.tones.iter().any(|tone| tone.degree == 3)
-        && formula.tones.iter().any(|tone| tone.degree == 7)
-        && formula
-            .tones
-            .iter()
-            .any(|tone| matches!(tone.degree, 9 | 13))
-        && !formula_has_altered_fifth(formula)
+        && summary.has_degree(3)
+        && summary.has_degree(7)
+        && (summary.has_degree(9) || summary.has_degree(13))
+        && !summary_has_altered_fifth(summary)
     {
         160
     } else {
@@ -1099,15 +892,15 @@ fn rooted_extension_omitted_fifth_bonus(
 fn rooted_seventh_omitted_third_bonus(
     root: NoteName,
     bass: PitchClass,
-    formula: &ChordFormula,
+    summary: CandidateFormulaSummary,
     omitted: bool,
     omissions: &[InferredOmission],
 ) -> u32 {
     if omitted
         && bass == root.pitch_class()
         && omissions == [InferredOmission::Third]
-        && formula_has_seventh(formula)
-        && !formula_has_altered_fifth(formula)
+        && summary_has_seventh(summary)
+        && !summary_has_altered_fifth(summary)
     {
         180
     } else {
@@ -1118,7 +911,7 @@ fn rooted_seventh_omitted_third_bonus(
 fn analysis_score(
     root: NoteName,
     spec: &ChordSpec,
-    formula: &ChordFormula,
+    summary: CandidateFormulaSummary,
     bass: PitchClass,
     omitted: bool,
     penalize_chord_tone_bass: bool,
@@ -1128,13 +921,13 @@ fn analysis_score(
         score += if omitted {
             400
         } else {
-            chord_tone_bass_penalty(formula, bass).unwrap_or(400)
+            chord_tone_bass_penalty_from_summary(summary, bass).unwrap_or(400)
         };
     }
     score += u32::try_from(spec_suffix_len(spec)).unwrap_or(100);
     score += u32::from(root.accidental.unsigned_abs()) * 8;
     score += root_spelling_penalty(root);
-    score += u32::try_from(formula.tones.len()).unwrap_or(20) * 4;
+    score += u32::from(summary.tone_count) * 4;
 
     if omitted {
         score += 80;
@@ -1285,14 +1078,17 @@ const fn decimal_len(value: u8) -> usize {
     }
 }
 
-fn contextual_omission_adjustment(formula: &ChordFormula, omissions: &[InferredOmission]) -> u32 {
-    if is_contextual_altered_upper_alias(formula, omissions) {
+fn contextual_omission_adjustment(
+    summary: CandidateFormulaSummary,
+    omissions: &[InferredOmission],
+) -> u32 {
+    if is_contextual_altered_upper_alias(summary, omissions) {
         650
-    } else if is_contextual_rootless_half_diminished_alias(formula, omissions) {
+    } else if is_contextual_rootless_half_diminished_alias(summary, omissions) {
         500
-    } else if is_contextual_rootless_diminished_seventh_alias(formula, omissions) {
+    } else if is_contextual_rootless_diminished_seventh_alias(summary, omissions) {
         420
-    } else if is_contextual_rootless_upper_alias(formula, omissions) {
+    } else if is_contextual_rootless_upper_alias(summary, omissions) {
         if omissions.contains(&InferredOmission::Fifth) {
             220
         } else {
@@ -1304,20 +1100,20 @@ fn contextual_omission_adjustment(formula: &ChordFormula, omissions: &[InferredO
 }
 
 fn is_contextual_rootless_upper_alias(
-    formula: &ChordFormula,
+    summary: CandidateFormulaSummary,
     omissions: &[InferredOmission],
 ) -> bool {
     omissions.contains(&InferredOmission::Root)
         && omissions
             .iter()
             .all(|omission| matches!(*omission, InferredOmission::Root | InferredOmission::Fifth))
-        && formula.tones.len().saturating_sub(omissions.len()) >= 4
-        && !formula_has_altered_fifth(formula)
-        && formula_supports_rootless_upper_alias(formula)
+        && usize::from(summary.tone_count).saturating_sub(omissions.len()) >= 4
+        && !summary_has_altered_fifth(summary)
+        && summary_supports_rootless_upper_alias(summary)
 }
 
 fn is_contextual_altered_upper_alias(
-    formula: &ChordFormula,
+    summary: CandidateFormulaSummary,
     omissions: &[InferredOmission],
 ) -> bool {
     omissions.contains(&InferredOmission::Root)
@@ -1325,62 +1121,58 @@ fn is_contextual_altered_upper_alias(
         && omissions
             .iter()
             .all(|omission| matches!(*omission, InferredOmission::Root | InferredOmission::Third))
-        && formula_has_intervals(formula, &["b7", "b9", "#9", "b13"])
+        && summary_has_intervals(summary, &["b7", "b9", "#9", "b13"])
 }
 
 fn is_contextual_rootless_diminished_seventh_alias(
-    formula: &ChordFormula,
+    summary: CandidateFormulaSummary,
     omissions: &[InferredOmission],
 ) -> bool {
-    omissions == [InferredOmission::Root] && formula_has_intervals(formula, &["b3", "b5", "bb7"])
+    omissions == [InferredOmission::Root] && summary_has_intervals(summary, &["b3", "b5", "bb7"])
 }
 
 fn is_contextual_rootless_half_diminished_alias(
-    formula: &ChordFormula,
+    summary: CandidateFormulaSummary,
     omissions: &[InferredOmission],
 ) -> bool {
     omissions == [InferredOmission::Root]
-        && formula.tones.len() == 4
-        && formula_has_intervals(formula, &["b3", "b5", "b7"])
-}
-
-fn formula_supports_rootless_upper_alias(formula: &ChordFormula) -> bool {
-    formula_has_upper_structure(formula)
-        && formula.tones.iter().any(|tone| tone.degree == 7)
-        && formula
-            .tones
-            .iter()
-            .any(|tone| tone.interval.degree() == 3 && tone.interval.accidental_delta() == 0)
-}
-
-fn formula_has_upper_structure(formula: &ChordFormula) -> bool {
-    formula
-        .tones
-        .iter()
-        .any(|tone| matches!(tone.degree, 9 | 11 | 13))
+        && summary.tone_count == 4
+        && summary_has_intervals(summary, &["b3", "b5", "b7"])
 }
 
 fn formula_has_seventh(formula: &ChordFormula) -> bool {
     formula.tones.iter().any(|tone| tone.degree == 7)
 }
 
-fn formula_has_altered_fifth(formula: &ChordFormula) -> bool {
-    formula
-        .tones
-        .iter()
-        .any(|tone| tone.degree == 5 && !tone.interval.is_natural_fifth())
+fn summary_supports_rootless_upper_alias(summary: CandidateFormulaSummary) -> bool {
+    summary.has_upper_structure() && summary.has_degree(7) && summary.has_interval(3, 0)
 }
 
-fn formula_has_intervals(formula: &ChordFormula, intervals: &[&str]) -> bool {
+fn summary_has_seventh(summary: CandidateFormulaSummary) -> bool {
+    summary.has_degree(7)
+}
+
+fn summary_has_altered_fifth(summary: CandidateFormulaSummary) -> bool {
+    for pitch in 0..12 {
+        if summary.degree_by_pitch[pitch] == 5
+            && i16::from(summary.semitone_by_pitch[pitch]) != natural_semitones(5)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn summary_has_intervals(summary: CandidateFormulaSummary, intervals: &[&str]) -> bool {
     intervals.iter().all(|interval| {
-        formula
-            .tones
-            .iter()
-            .any(|tone| interval_matches(tone.interval, interval))
+        let Some((degree, accidental_delta)) = interval_label(interval) else {
+            return false;
+        };
+        summary.has_interval(degree, accidental_delta)
     })
 }
 
-fn interval_matches(interval: crate::formula::IntervalName, label: &str) -> bool {
+fn interval_label(label: &str) -> Option<(u8, i16)> {
     let (degree, accidental_delta) = match label {
         "1" => (1, 0),
         "2" => (2, 0),
@@ -1401,9 +1193,9 @@ fn interval_matches(interval: crate::formula::IntervalName, label: &str) -> bool
         "#11" => (11, 1),
         "b13" => (13, -1),
         "13" => (13, 0),
-        _ => return false,
+        _ => return None,
     };
-    interval.degree() == degree && interval.accidental_delta() == accidental_delta
+    Some((degree, accidental_delta))
 }
 
 fn is_useful_omitted_alias(analysis: &ChordAnalysis) -> bool {
@@ -1490,16 +1282,23 @@ fn is_useful_rootless_half_diminished_alias(analysis: &ChordAnalysis) -> bool {
             .all(|interval| analysis.intervals.iter().any(|value| value == interval))
 }
 
-fn chord_tone_bass_penalty(formula: &ChordFormula, bass: PitchClass) -> Option<u32> {
-    let tone = formula.tone_for_pitch(bass)?;
-    Some(match tone.degree {
+fn chord_tone_bass_penalty_from_summary(
+    summary: CandidateFormulaSummary,
+    bass: PitchClass,
+) -> Option<u32> {
+    let tone = summary.tone_for_pitch(bass)?;
+    Some(chord_tone_bass_penalty_for_degree(tone.degree))
+}
+
+fn chord_tone_bass_penalty_for_degree(degree: u8) -> u32 {
+    match degree {
         1 => 0,
         3 => 45,
         5 => 35,
         7 => 70,
         2 | 4 | 6 | 9 | 11 | 13 => 90,
         _ => 120,
-    })
+    }
 }
 
 fn root_spelling_penalty(root: NoteName) -> u32 {

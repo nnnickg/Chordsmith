@@ -26,20 +26,12 @@ pub struct IntervalName {
 }
 
 impl IntervalName {
-    const fn new(degree: u8, semitones: i16) -> Self {
+    pub(crate) const fn new(degree: u8, semitones: i16) -> Self {
         Self { degree, semitones }
     }
 
     pub(crate) fn is_natural_fifth(self) -> bool {
         self.degree == 5 && self.semitones == natural_semitones(5)
-    }
-
-    pub(crate) const fn degree(self) -> u8 {
-        self.degree
-    }
-
-    pub(crate) fn accidental_delta(self) -> i16 {
-        self.semitones - natural_semitones(self.degree)
     }
 }
 

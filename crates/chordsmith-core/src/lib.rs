@@ -54,6 +54,9 @@ impl fmt::Display for ChordsmithError {
 
 impl std::error::Error for ChordsmithError {}
 
+#[cfg(test)]
+mod candidate_data_builder;
+mod candidate_record;
 mod formula;
 mod identify;
 mod inline_vec;

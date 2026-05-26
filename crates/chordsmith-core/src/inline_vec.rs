@@ -19,6 +19,10 @@ impl<T: Copy + Default, const N: usize> Default for InlineVec<T, N> {
 }
 
 impl<T, const N: usize> InlineVec<T, N> {
+    pub(crate) const fn from_parts(len: u8, items: [T; N]) -> Self {
+        Self { len, items }
+    }
+
     pub(crate) fn as_slice(&self) -> &[T] {
         &self.items[..usize::from(self.len)]
     }

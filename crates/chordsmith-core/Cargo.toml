@@ -9,6 +9,9 @@ publish = false
 [dependencies]
 serde.workspace = true
 
+[build-dependencies]
+serde.workspace = true
+
 [[bench]]
 name = "perf"
 harness = false
