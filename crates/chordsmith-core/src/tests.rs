@@ -611,6 +611,9 @@ fn parses_six_nine_as_a_chord_quality_not_a_slash_bass() {
     let (symbol, _) = analyze_symbol("C(add9)").unwrap();
     assert_eq!(symbol.name(), "Cadd9");
 
+    let (symbol, _) = analyze_symbol("C(6/9)").unwrap();
+    assert_eq!(symbol.name(), "C6/9");
+
     let (symbol, _) = analyze_symbol("C6/9/E").unwrap();
     assert_eq!(symbol.name(), "C6/9/E");
 }

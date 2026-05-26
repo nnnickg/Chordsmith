@@ -175,7 +175,6 @@ fn identify_core(
         }
     });
 
-    candidates.sort();
     candidates
 }
 
@@ -548,53 +547,63 @@ impl Default for AnalysisCandidateSet<'_> {
 
 impl<'a> AnalysisCandidateSet<'a> {
     fn consider(&mut self, candidate: AnalysisCandidate<'a>) {
-        for existing in self.items.iter_mut().take(self.len).flatten() {
-            if same_analysis_symbol(existing, &candidate) {
+        for idx in 0..self.len {
+            if let Some(existing) = self.items[idx].as_ref()
+                && same_analysis_symbol(existing, &candidate)
+            {
                 if compare_analysis_candidates(&candidate, existing).is_lt() {
-                    *existing = candidate;
+                    self.remove(idx);
+                    self.insert_sorted(candidate);
                 }
                 return;
             }
         }
 
-        if self.len < MAX_IDENTIFY_ANALYSES {
-            self.items[self.len] = Some(candidate);
-            self.len += 1;
-            return;
-        }
-
-        let Some(worst_idx) = self.worst_index() else {
-            return;
-        };
-        if self.items[worst_idx]
-            .as_ref()
-            .is_some_and(|worst| compare_analysis_candidates(&candidate, worst).is_lt())
-        {
-            self.items[worst_idx] = Some(candidate);
-        }
-    }
-
-    fn worst_index(&self) -> Option<usize> {
-        let mut worst: Option<usize> = None;
-        for (idx, candidate) in self.items.iter().take(self.len).enumerate() {
-            let Some(candidate) = candidate.as_ref() else {
-                continue;
+        if self.len == MAX_IDENTIFY_ANALYSES {
+            let Some(worst) = self.items[self.len - 1].as_ref() else {
+                return;
             };
-            if worst.is_none_or(|worst_idx| {
-                self.items[worst_idx]
-                    .as_ref()
-                    .is_some_and(|worst_candidate| {
-                        compare_analysis_candidates(candidate, worst_candidate).is_gt()
-                    })
-            }) {
-                worst = Some(idx);
+            if !compare_analysis_candidates(&candidate, worst).is_lt() {
+                return;
             }
+            self.len -= 1;
+            self.items[self.len] = None;
         }
-        worst
+
+        self.insert_sorted(candidate);
     }
 
-    fn sort(&mut self) {
-        self.items[..self.len].sort_unstable_by(compare_candidate_slots);
+    fn insert_sorted(&mut self, candidate: AnalysisCandidate<'a>) {
+        debug_assert!(self.len < MAX_IDENTIFY_ANALYSES);
+        let pos = self.insertion_index(&candidate);
+        for idx in (pos..self.len).rev() {
+            self.items[idx + 1] = self.items[idx].take();
+        }
+        self.items[pos] = Some(candidate);
+        self.len += 1;
+    }
+
+    fn insertion_index(&self, candidate: &AnalysisCandidate<'_>) -> usize {
+        let mut pos = 0;
+        while pos < self.len {
+            let Some(existing) = self.items[pos].as_ref() else {
+                break;
+            };
+            if compare_analysis_candidates(candidate, existing).is_lt() {
+                break;
+            }
+            pos += 1;
+        }
+        pos
+    }
+
+    fn remove(&mut self, pos: usize) {
+        debug_assert!(pos < self.len);
+        for idx in pos..self.len - 1 {
+            self.items[idx] = self.items[idx + 1].take();
+        }
+        self.len -= 1;
+        self.items[self.len] = None;
     }
 
     fn iter(&self) -> impl Iterator<Item = &AnalysisCandidate<'a>> + '_ {
@@ -603,18 +612,6 @@ impl<'a> AnalysisCandidateSet<'a> {
 
     const fn len(&self) -> usize {
         self.len
-    }
-}
-
-fn compare_candidate_slots(
-    left: &Option<AnalysisCandidate<'_>>,
-    right: &Option<AnalysisCandidate<'_>>,
-) -> Ordering {
-    match (left.as_ref(), right.as_ref()) {
-        (Some(left), Some(right)) => compare_analysis_candidates(left, right),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => Ordering::Equal,
     }
 }
 

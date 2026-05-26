@@ -111,13 +111,12 @@ fn is_six_nine_slash(input: &str, slash_idx: usize) -> bool {
 }
 
 pub(crate) fn parse_descriptor(input: &str) -> Result<ChordSpec, ChordsmithError> {
-    let mut text = normalize_descriptor_text(input)?;
-    text = text.replace("6/9", "69");
+    let text = normalize_descriptor_text(input)?;
 
     let mut spec = ChordSpec::default();
     let mut explicit_quality = false;
     let mut half_diminished_can_extend = false;
-    let mut rest = text.as_str();
+    let mut rest = text.as_ref();
 
     if !starts_with_major_extension(rest)
         && let Some(next) = take_prefix(rest, &["min", "Min", "MIN", "m", "-"])
@@ -234,7 +233,7 @@ pub(crate) fn parse_descriptor(input: &str) -> Result<ChordSpec, ChordsmithError
                 "9",
             )?;
             rest = next;
-        } else if let Some(next) = take_prefix(rest, &["69"]) {
+        } else if let Some(next) = take_prefix(rest, &["6/9", "69"]) {
             set_six_nine(&mut spec)?;
             rest = next;
         } else if let Some(next) = take_prefix(rest, &["7"]) {
@@ -270,7 +269,14 @@ pub(crate) fn parse_descriptor(input: &str) -> Result<ChordSpec, ChordsmithError
     Ok(spec)
 }
 
-fn normalize_descriptor_text(input: &str) -> Result<String, ChordsmithError> {
+fn normalize_descriptor_text(input: &str) -> Result<Cow<'_, str>, ChordsmithError> {
+    if !input
+        .chars()
+        .any(|ch| ch.is_whitespace() || ch == '(' || ch == ')')
+    {
+        return Ok(Cow::Borrowed(input));
+    }
+
     let mut out = String::new();
     let mut chars = input.char_indices().peekable();
     while let Some((idx, ch)) = chars.next() {
@@ -289,9 +295,9 @@ fn normalize_descriptor_text(input: &str) -> Result<String, ChordsmithError> {
                 };
                 let group = &input[start..end];
                 if group.is_empty()
-                    || group.chars().any(|inner| {
-                        inner.is_whitespace() || inner == '(' || inner == ')' || inner == '/'
-                    })
+                    || group
+                        .chars()
+                        .any(|inner| inner.is_whitespace() || inner == '(' || inner == ')')
                     || !parenthesized_descriptor_group_is_valid(group)
                 {
                     return Err(ChordsmithError::new(format!(
@@ -309,7 +315,7 @@ fn normalize_descriptor_text(input: &str) -> Result<String, ChordsmithError> {
         }
     }
 
-    Ok(out)
+    Ok(Cow::Owned(out))
 }
 
 fn parenthesized_descriptor_group_is_valid(mut input: &str) -> bool {
@@ -333,7 +339,8 @@ fn take_descriptor_token(input: &str) -> Option<&str> {
             "Δ11", "△11", "maj9", "Maj9", "MAJ9", "M9", "Δ9", "△9", "maj7", "Maj7", "MAJ7", "M7",
             "Δ7", "△7", "add13", "add11", "add4", "add9", "add2", "omit5", "omit3", "omit1", "no5",
             "no3", "no1", "sus2", "Sus2", "SUS2", "sus4", "Sus4", "SUS4", "sus", "Sus", "SUS",
-            "alt", "Alt", "ALT", "ø7", "Ø7", "ø", "Ø", "13", "11", "9", "69", "7", "6", "Δ", "△",
+            "alt", "Alt", "ALT", "ø7", "Ø7", "ø", "Ø", "13", "11", "9", "6/9", "69", "7", "6", "Δ",
+            "△",
         ],
     ) {
         return Some(next);
