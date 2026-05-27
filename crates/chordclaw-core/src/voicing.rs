@@ -10,7 +10,7 @@ use crate::scoring::{rank_voicing_candidates, voicing_score_with_profile};
 use crate::symbol::ChordSymbol;
 use crate::symbol::MAX_OMISSIONS;
 use crate::{
-    ChordsmithError, DEFAULT_LIMIT, DEFAULT_MAX_FRET, DEFAULT_MAX_SPAN, DEFAULT_MIN_FRET,
+    ChordClawError, DEFAULT_LIMIT, DEFAULT_MAX_FRET, DEFAULT_MAX_SPAN, DEFAULT_MIN_FRET,
     MAX_ALL_VOICINGS, MAX_DIVERSITY_SCORE_WINDOW, MAX_LIMIT, MAX_STANDARD_FRET, MAX_STRING_COUNT,
 };
 
@@ -55,7 +55,7 @@ pub struct Voicing {
     pub score: u32,
 }
 
-pub fn voicings(input: &str, options: VoicingOptions) -> Result<Vec<Voicing>, ChordsmithError> {
+pub fn voicings(input: &str, options: VoicingOptions) -> Result<Vec<Voicing>, ChordClawError> {
     voicings_with_tuning(input, STANDARD_TUNING, options)
 }
 
@@ -63,27 +63,27 @@ pub fn voicings_with_tuning(
     input: &str,
     tuning: GuitarTuning,
     options: VoicingOptions,
-) -> Result<Vec<Voicing>, ChordsmithError> {
+) -> Result<Vec<Voicing>, ChordClawError> {
     if options.min_fret > MAX_STANDARD_FRET {
-        return Err(ChordsmithError::new(format!(
+        return Err(ChordClawError::new(format!(
             "invalid min_fret '{}': standard guitar range is 0..={MAX_STANDARD_FRET}",
             options.min_fret
         )));
     }
     if options.max_fret > MAX_STANDARD_FRET {
-        return Err(ChordsmithError::new(format!(
+        return Err(ChordClawError::new(format!(
             "invalid max_fret '{}': standard guitar range is 0..={MAX_STANDARD_FRET}",
             options.max_fret
         )));
     }
     if options.max_span > MAX_STANDARD_FRET {
-        return Err(ChordsmithError::new(format!(
+        return Err(ChordClawError::new(format!(
             "invalid max_span '{}': standard guitar range is 0..={MAX_STANDARD_FRET}",
             options.max_span
         )));
     }
     if options.min_fret > options.max_fret {
-        return Err(ChordsmithError::new(format!(
+        return Err(ChordClawError::new(format!(
             "invalid fret range: min_fret '{}' cannot exceed max_fret '{}'",
             options.min_fret, options.max_fret
         )));
@@ -91,7 +91,7 @@ pub fn voicings_with_tuning(
     if let VoicingMode::Curated { limit } = options.mode
         && limit > MAX_LIMIT
     {
-        return Err(ChordsmithError::new(format!(
+        return Err(ChordClawError::new(format!(
             "invalid limit '{limit}': curated voicing limit is 0..={MAX_LIMIT}; use --all for exhaustive output"
         )));
     }
@@ -354,9 +354,9 @@ impl AllVoicingCollector {
         }
     }
 
-    fn finish(self) -> Result<Vec<VoicingCandidate>, ChordsmithError> {
+    fn finish(self) -> Result<Vec<VoicingCandidate>, ChordClawError> {
         if self.exceeded {
-            Err(ChordsmithError::new(format!(
+            Err(ChordClawError::new(format!(
                 "voicing result exceeds --all cap of {MAX_ALL_VOICINGS}; narrow the search with --min-fret, --max-fret, or --max-span"
             )))
         } else {

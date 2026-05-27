@@ -3,8 +3,8 @@
 use std::io::Read;
 use std::process::{Command, Output, Stdio};
 
-fn chordsmith() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_chordsmith"))
+fn chordclaw() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_chordclaw"))
 }
 
 fn assert_success(output: &Output) {
@@ -18,18 +18,18 @@ fn assert_success(output: &Output) {
 }
 
 fn assert_broken_pipe_exits_cleanly(args: &[&str]) {
-    let mut child = chordsmith()
+    let mut child = chordclaw()
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn chordsmith");
+        .expect("spawn chordclaw");
     let mut stdout = child.stdout.take().expect("stdout pipe");
     let mut byte = [0u8; 1];
     stdout.read_exact(&mut byte).expect("read first byte");
     drop(stdout);
 
-    let output = child.wait_with_output().expect("wait for chordsmith");
+    let output = child.wait_with_output().expect("wait for chordclaw");
     assert_success(&output);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("panicked"), "{stderr}");
@@ -37,24 +37,24 @@ fn assert_broken_pipe_exits_cleanly(args: &[&str]) {
 
 #[test]
 fn version_flag_exits_successfully() {
-    let output = chordsmith()
+    let output = chordclaw()
         .arg("--version")
         .output()
-        .expect("run chordsmith --version");
+        .expect("run chordclaw --version");
 
     assert_success(&output);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        concat!("chordsmith ", env!("CARGO_PKG_VERSION"))
+        concat!("chordclaw ", env!("CARGO_PKG_VERSION"))
     );
 }
 
 #[test]
 fn identify_prints_primary_chord() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["identify", "022000"])
         .output()
-        .expect("run chordsmith identify");
+        .expect("run chordclaw identify");
 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -63,10 +63,10 @@ fn identify_prints_primary_chord() {
 
 #[test]
 fn identify_prints_omissions_separately_from_primary_symbol() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["identify", "476xxx"])
         .output()
-        .expect("run chordsmith identify omitted fifth dyad");
+        .expect("run chordclaw identify omitted fifth dyad");
 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -77,10 +77,10 @@ fn identify_prints_omissions_separately_from_primary_symbol() {
 
 #[test]
 fn identify_json_outputs_primary_symbol() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["identify", "--json", "x12010"])
         .output()
-        .expect("run chordsmith identify --json");
+        .expect("run chordclaw identify --json");
 
     assert_success(&output);
     let value: serde_json::Value =
@@ -90,10 +90,10 @@ fn identify_json_outputs_primary_symbol() {
 
 #[test]
 fn identify_hides_theoretical_aliases_in_text_output() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["identify", "x12010"])
         .output()
-        .expect("run chordsmith identify");
+        .expect("run chordclaw identify");
 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -104,10 +104,10 @@ fn identify_hides_theoretical_aliases_in_text_output() {
 
 #[test]
 fn identify_accepts_alternate_six_string_tuning() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["identify", "--tuning", "DADGAD", "000000"])
         .output()
-        .expect("run chordsmith identify --tuning DADGAD");
+        .expect("run chordclaw identify --tuning DADGAD");
 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -117,19 +117,19 @@ fn identify_accepts_alternate_six_string_tuning() {
 
 #[test]
 fn identify_accepts_extended_range_guitar_tuning() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["identify", "--instrument", "guitar7", "0000000"])
         .output()
-        .expect("run chordsmith identify guitar7");
+        .expect("run chordclaw identify guitar7");
 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Notes: B E A D G B E"));
 
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["identify", "--tuning", "F#BEADGBE", "00000000"])
         .output()
-        .expect("run chordsmith identify 8-string tuning");
+        .expect("run chordclaw identify 8-string tuning");
 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -139,10 +139,10 @@ fn identify_accepts_extended_range_guitar_tuning() {
 
 #[test]
 fn identify_accepts_ukulele_instrument() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["identify", "--instrument", "ukulele", "2010"])
         .output()
-        .expect("run chordsmith identify --instrument ukulele");
+        .expect("run chordclaw identify --instrument ukulele");
 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -152,7 +152,7 @@ fn identify_accepts_ukulele_instrument() {
 
 #[test]
 fn identify_accepts_explicit_ukulele_octave_tuning() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args([
             "identify",
             "--instrument",
@@ -162,7 +162,7 @@ fn identify_accepts_explicit_ukulele_octave_tuning() {
             "0000",
         ])
         .output()
-        .expect("run chordsmith identify low-G ukulele");
+        .expect("run chordclaw identify low-G ukulele");
 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -171,7 +171,7 @@ fn identify_accepts_explicit_ukulele_octave_tuning() {
 
 #[test]
 fn voicings_accepts_ukulele_instrument() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args([
             "voicings",
             "--json",
@@ -182,7 +182,7 @@ fn voicings_accepts_ukulele_instrument() {
             "C",
         ])
         .output()
-        .expect("run chordsmith voicings --instrument ukulele");
+        .expect("run chordclaw voicings --instrument ukulele");
 
     assert_success(&output);
     let value: serde_json::Value =
@@ -194,10 +194,10 @@ fn voicings_accepts_ukulele_instrument() {
 
 #[test]
 fn identify_accepts_unicode_tuning_glyphs() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["identify", "--tuning", "F♯,B,E,A,C♯,F♯", "000000"])
         .output()
-        .expect("run chordsmith identify --tuning with unicode accidentals");
+        .expect("run chordclaw identify --tuning with unicode accidentals");
 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -206,10 +206,10 @@ fn identify_accepts_unicode_tuning_glyphs() {
 
 #[test]
 fn analyze_prints_non_chord_slash_bass() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["analyze", "C/D"])
         .output()
-        .expect("run chordsmith analyze C/D");
+        .expect("run chordclaw analyze C/D");
 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -220,18 +220,18 @@ fn analyze_prints_non_chord_slash_bass() {
 
 #[test]
 fn voicings_all_returns_more_than_default_limit() {
-    let limited = chordsmith()
+    let limited = chordclaw()
         .args(["voicings", "--json", "C"])
         .output()
-        .expect("run chordsmith voicings --json");
+        .expect("run chordclaw voicings --json");
     assert_success(&limited);
     let limited: serde_json::Value =
         serde_json::from_slice(&limited.stdout).expect("valid limited voicings json");
 
-    let all = chordsmith()
+    let all = chordclaw()
         .args(["voicings", "--json", "--all", "C"])
         .output()
-        .expect("run chordsmith voicings --json --all");
+        .expect("run chordclaw voicings --json --all");
     assert_success(&all);
     let all: serde_json::Value =
         serde_json::from_slice(&all.stdout).expect("valid all voicings json");
@@ -242,10 +242,10 @@ fn voicings_all_returns_more_than_default_limit() {
 
 #[test]
 fn voicings_all_rejects_limit() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["voicings", "--all", "--limit", "2", "C"])
         .output()
-        .expect("run chordsmith voicings --all --limit");
+        .expect("run chordclaw voicings --all --limit");
 
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("--all cannot be used with --limit"));
@@ -263,10 +263,10 @@ fn json_output_treats_broken_pipe_as_success() {
 
 #[test]
 fn voicings_rejects_pathological_limit() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["voicings", "--limit", "1000000", "Calt"])
         .output()
-        .expect("run chordsmith voicings --limit 1000000 Calt");
+        .expect("run chordclaw voicings --limit 1000000 Calt");
 
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("invalid limit"));
@@ -274,10 +274,10 @@ fn voicings_rejects_pathological_limit() {
 
 #[test]
 fn unknown_chord_descriptor_exits_as_data_error() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["analyze", "Cwat"])
         .output()
-        .expect("run chordsmith analyze Cwat");
+        .expect("run chordclaw analyze Cwat");
 
     assert_eq!(output.status.code(), Some(65));
     assert!(String::from_utf8_lossy(&output.stderr).contains("chord descriptor"));
@@ -285,10 +285,10 @@ fn unknown_chord_descriptor_exits_as_data_error() {
 
 #[test]
 fn malformed_numbered_descriptor_exits_as_data_error() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["analyze", "C79"])
         .output()
-        .expect("run chordsmith analyze C79");
+        .expect("run chordclaw analyze C79");
 
     assert_eq!(output.status.code(), Some(65));
     assert!(String::from_utf8_lossy(&output.stderr).contains("chord descriptor"));
@@ -296,10 +296,10 @@ fn malformed_numbered_descriptor_exits_as_data_error() {
 
 #[test]
 fn malformed_parenthesized_descriptor_exits_as_data_error() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["analyze", "C(ma)j7"])
         .output()
-        .expect("run chordsmith analyze C(ma)j7");
+        .expect("run chordclaw analyze C(ma)j7");
 
     assert_eq!(output.status.code(), Some(65));
     assert!(String::from_utf8_lossy(&output.stderr).contains("chord descriptor"));
@@ -307,10 +307,10 @@ fn malformed_parenthesized_descriptor_exits_as_data_error() {
 
 #[test]
 fn leading_alteration_canonical_name_is_grouped() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["analyze", "C(b9)"])
         .output()
-        .expect("run chordsmith analyze C(b9)");
+        .expect("run chordclaw analyze C(b9)");
 
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -320,10 +320,10 @@ fn leading_alteration_canonical_name_is_grouped() {
 
 #[test]
 fn invalid_alt_descriptor_exits_as_data_error() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["analyze", "Cmalt"])
         .output()
-        .expect("run chordsmith analyze Cmalt");
+        .expect("run chordclaw analyze Cmalt");
 
     assert_eq!(output.status.code(), Some(65));
     assert!(String::from_utf8_lossy(&output.stderr).contains("alt is already"));
@@ -331,10 +331,10 @@ fn invalid_alt_descriptor_exits_as_data_error() {
 
 #[test]
 fn malformed_slash_chord_exits_as_data_error() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["analyze", "C/9"])
         .output()
-        .expect("run chordsmith analyze C/9");
+        .expect("run chordclaw analyze C/9");
 
     assert_eq!(output.status.code(), Some(65));
     assert!(String::from_utf8_lossy(&output.stderr).contains("slash chord"));
@@ -342,10 +342,10 @@ fn malformed_slash_chord_exits_as_data_error() {
 
 #[test]
 fn clap_errors_are_not_wrapped_twice() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["identify"])
         .output()
-        .expect("run chordsmith identify without argument");
+        .expect("run chordclaw identify without argument");
 
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -355,34 +355,34 @@ fn clap_errors_are_not_wrapped_twice() {
 
 #[test]
 fn voicings_rejects_frets_outside_standard_range() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["voicings", "--min-fret", "31", "C"])
         .output()
-        .expect("run chordsmith voicings --min-fret 31");
+        .expect("run chordclaw voicings --min-fret 31");
 
     assert_eq!(output.status.code(), Some(65));
     assert!(String::from_utf8_lossy(&output.stderr).contains("standard guitar range"));
 
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["voicings", "--max-fret", "31", "C"])
         .output()
-        .expect("run chordsmith voicings --max-fret 31");
+        .expect("run chordclaw voicings --max-fret 31");
 
     assert_eq!(output.status.code(), Some(65));
     assert!(String::from_utf8_lossy(&output.stderr).contains("standard guitar range"));
 
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["voicings", "--max-span", "31", "C"])
         .output()
-        .expect("run chordsmith voicings --max-span 31");
+        .expect("run chordclaw voicings --max-span 31");
 
     assert_eq!(output.status.code(), Some(65));
     assert!(String::from_utf8_lossy(&output.stderr).contains("standard guitar range"));
 
-    let output = chordsmith()
+    let output = chordclaw()
         .args(["voicings", "--min-fret", "13", "--max-fret", "12", "C"])
         .output()
-        .expect("run chordsmith voicings --min-fret 13 --max-fret 12");
+        .expect("run chordclaw voicings --min-fret 13 --max-fret 12");
 
     assert_eq!(output.status.code(), Some(65));
     assert!(String::from_utf8_lossy(&output.stderr).contains("min_fret"));
@@ -390,7 +390,7 @@ fn voicings_rejects_frets_outside_standard_range() {
 
 #[test]
 fn voicings_min_fret_filters_low_and_open_frets() {
-    let output = chordsmith()
+    let output = chordclaw()
         .args([
             "voicings",
             "--json",
@@ -401,7 +401,7 @@ fn voicings_min_fret_filters_low_and_open_frets() {
             "C",
         ])
         .output()
-        .expect("run chordsmith voicings --min-fret 12 --max-fret 15");
+        .expect("run chordclaw voicings --min-fret 12 --max-fret 15");
 
     assert_success(&output);
     let value: serde_json::Value =
@@ -421,7 +421,7 @@ fn voicings_min_fret_filters_low_and_open_frets() {
         );
     }
 
-    let output = chordsmith()
+    let output = chordclaw()
         .args([
             "voicings",
             "--json",
@@ -432,7 +432,7 @@ fn voicings_min_fret_filters_low_and_open_frets() {
             "C",
         ])
         .output()
-        .expect("run chordsmith voicings --min-fret 12");
+        .expect("run chordclaw voicings --min-fret 12");
 
     assert_success(&output);
     let value: serde_json::Value =

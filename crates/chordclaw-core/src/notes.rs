@@ -6,7 +6,7 @@ use serde::{Serialize, Serializer, ser::SerializeStruct};
 use crate::inline_vec::InlineVec;
 use crate::parse::{normalize_chart_glyphs, parse_note_prefix};
 use crate::{
-    ChordsmithError, GUITAR_STRING_COUNT, GUITAR7_STRING_COUNT, GUITAR8_STRING_COUNT,
+    ChordClawError, GUITAR_STRING_COUNT, GUITAR7_STRING_COUNT, GUITAR8_STRING_COUNT,
     MAX_NOTE_ACCIDENTALS, MAX_STANDARD_FRET, MAX_STRING_COUNT, UKULELE_STRING_COUNT,
 };
 
@@ -130,9 +130,9 @@ impl NoteName {
         Self { letter, accidental }
     }
 
-    pub fn new(letter: NoteLetter, accidental: i8) -> Result<Self, ChordsmithError> {
+    pub fn new(letter: NoteLetter, accidental: i8) -> Result<Self, ChordClawError> {
         if accidental.unsigned_abs() > MAX_NOTE_ACCIDENTALS {
-            return Err(ChordsmithError::new(format!(
+            return Err(ChordClawError::new(format!(
                 "too many accidentals for note '{}{}'",
                 letter.char(),
                 accidental_text(accidental)
@@ -141,13 +141,13 @@ impl NoteName {
         Ok(Self { letter, accidental })
     }
 
-    pub fn parse(input: &str) -> Result<Self, ChordsmithError> {
+    pub fn parse(input: &str) -> Result<Self, ChordClawError> {
         let normalized = normalize_chart_glyphs(input);
         let (note, rest) = parse_note_prefix(normalized.as_ref())?;
         if rest.is_empty() {
             Ok(note)
         } else {
-            Err(ChordsmithError::new(format!("invalid note '{input}'")))
+            Err(ChordClawError::new(format!("invalid note '{input}'")))
         }
     }
 
@@ -301,7 +301,7 @@ pub enum Instrument {
 }
 
 impl Instrument {
-    pub fn parse(input: &str) -> Result<Self, ChordsmithError> {
+    pub fn parse(input: &str) -> Result<Self, ChordClawError> {
         match input.trim().to_ascii_lowercase().as_str() {
             "guitar" | "g" => Ok(Self::Guitar),
             "guitar7"
@@ -321,7 +321,7 @@ impl Instrument {
             | "eight-string"
             | "eight-string-guitar" => Ok(Self::Guitar8),
             "ukulele" | "uke" | "u" => Ok(Self::Ukulele),
-            other => Err(ChordsmithError::new(format!(
+            other => Err(ChordClawError::new(format!(
                 "unsupported instrument '{other}': expected guitar, guitar7, guitar8, or ukulele"
             ))),
         }
@@ -441,10 +441,10 @@ impl Tuning {
     fn from_parsed(
         parsed: ParsedTuning,
         instrument: Option<Instrument>,
-    ) -> Result<Self, ChordsmithError> {
+    ) -> Result<Self, ChordClawError> {
         let string_count = parsed.string_count;
         if !is_supported_string_count(string_count) {
-            return Err(ChordsmithError::new(format!(
+            return Err(ChordClawError::new(format!(
                 "expected 4, 6, 7, or 8 tuning notes, got {string_count}"
             )));
         }
@@ -455,7 +455,7 @@ impl Tuning {
             _ => Instrument::Guitar,
         });
         if instrument.string_count() != string_count {
-            return Err(ChordsmithError::new(format!(
+            return Err(ChordClawError::new(format!(
                 "expected {} tuning notes for {instrument}, got {string_count}",
                 instrument.string_count()
             )));
@@ -472,7 +472,7 @@ impl Tuning {
         })
     }
 
-    pub fn parse(input: &str) -> Result<Self, ChordsmithError> {
+    pub fn parse(input: &str) -> Result<Self, ChordClawError> {
         let normalized = normalize_chart_glyphs(input);
         let trimmed = normalized.trim();
         if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("standard") {
@@ -490,7 +490,7 @@ impl Tuning {
     pub fn parse_for_instrument(
         input: &str,
         instrument: Instrument,
-    ) -> Result<Self, ChordsmithError> {
+    ) -> Result<Self, ChordClawError> {
         let normalized = normalize_chart_glyphs(input);
         let trimmed = normalized.trim();
         if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("standard") {
@@ -667,7 +667,7 @@ struct ParsedTuning {
 fn parse_separated_tuning(
     input: &str,
     expected: Option<usize>,
-) -> Result<ParsedTuning, ChordsmithError> {
+) -> Result<ParsedTuning, ChordClawError> {
     let mut notes = [NoteName::const_new(NoteLetter::C, 0); MAX_STRING_COUNT];
     let mut open_pitches = [0i16; MAX_STRING_COUNT];
     let mut count = 0usize;
@@ -705,7 +705,7 @@ fn parse_separated_tuning(
 fn parse_compact_tuning(
     input: &str,
     expected: Option<usize>,
-) -> Result<ParsedTuning, ChordsmithError> {
+) -> Result<ParsedTuning, ChordClawError> {
     let mut notes = [NoteName::const_new(NoteLetter::C, 0); MAX_STRING_COUNT];
     let mut open_pitches = [0i16; MAX_STRING_COUNT];
     let mut count = 0usize;
@@ -714,7 +714,7 @@ fn parse_compact_tuning(
     while !rest.is_empty() {
         let (note, next) = parse_note_prefix(rest)?;
         if next.len() == rest.len() {
-            return Err(ChordsmithError::new(format!("invalid tuning '{input}'")));
+            return Err(ChordClawError::new(format!("invalid tuning '{input}'")));
         }
         let (octave, after_octave) = parse_optional_octave(next)?;
         if count < MAX_STRING_COUNT {
@@ -747,11 +747,11 @@ struct ParsedTuningNote {
     open_pitch: Option<i16>,
 }
 
-fn parse_tuning_note(input: &str) -> Result<ParsedTuningNote, ChordsmithError> {
+fn parse_tuning_note(input: &str) -> Result<ParsedTuningNote, ChordClawError> {
     let (note, rest) = parse_note_prefix(input)?;
     let (octave, rest) = parse_optional_octave(rest)?;
     if !rest.is_empty() {
-        return Err(ChordsmithError::new(format!(
+        return Err(ChordClawError::new(format!(
             "invalid tuning note '{input}'"
         )));
     }
@@ -761,7 +761,7 @@ fn parse_tuning_note(input: &str) -> Result<ParsedTuningNote, ChordsmithError> {
     })
 }
 
-fn parse_optional_octave(input: &str) -> Result<(Option<i8>, &str), ChordsmithError> {
+fn parse_optional_octave(input: &str) -> Result<(Option<i8>, &str), ChordClawError> {
     let end = input
         .char_indices()
         .take_while(|(_, ch)| ch.is_ascii_digit())
@@ -773,7 +773,7 @@ fn parse_optional_octave(input: &str) -> Result<(Option<i8>, &str), ChordsmithEr
     }
     let octave = input[..end]
         .parse::<i8>()
-        .map_err(|_| ChordsmithError::new(format!("invalid tuning octave '{}'", &input[..end])))?;
+        .map_err(|_| ChordClawError::new(format!("invalid tuning octave '{}'", &input[..end])))?;
     Ok((Some(octave), &input[end..]))
 }
 
@@ -781,11 +781,11 @@ const fn absolute_note_pitch(note: NoteName, octave: i8) -> i16 {
     octave as i16 * 12 + note.pitch_class().value() as i16
 }
 
-fn validate_tuning_octaves(count: usize, octave_count: usize) -> Result<(), ChordsmithError> {
+fn validate_tuning_octaves(count: usize, octave_count: usize) -> Result<(), ChordClawError> {
     if octave_count == 0 || octave_count == count {
         Ok(())
     } else {
-        Err(ChordsmithError::new(
+        Err(ChordClawError::new(
             "invalid tuning: provide octaves for every note or for none",
         ))
     }
@@ -853,14 +853,14 @@ pub struct Fingering {
 }
 
 impl Fingering {
-    pub fn parse(input: &str) -> Result<Self, ChordsmithError> {
+    pub fn parse(input: &str) -> Result<Self, ChordClawError> {
         Self::parse_with_string_count(input, GUITAR_STRING_COUNT)
     }
 
     pub fn parse_with_string_count(
         input: &str,
         string_count: usize,
-    ) -> Result<Self, ChordsmithError> {
+    ) -> Result<Self, ChordClawError> {
         validate_exact_string_count(string_count)?;
         let trimmed = input.trim();
         if trimmed.contains('-') {
@@ -906,7 +906,7 @@ impl Fingering {
     }
 }
 
-fn parse_compact_fingering(input: &str, string_count: usize) -> Result<Fingering, ChordsmithError> {
+fn parse_compact_fingering(input: &str, string_count: usize) -> Result<Fingering, ChordClawError> {
     let count = input.chars().count();
     validate_count(count, Some(string_count), "strings")?;
 
@@ -918,8 +918,8 @@ fn parse_compact_fingering(input: &str, string_count: usize) -> Result<Fingering
                 .to_digit(10)
                 .and_then(|value| u8::try_from(value).ok())
                 .map(Some)
-                .ok_or_else(|| ChordsmithError::new(format!("invalid fret '{ch}'")))?,
-            _ => return Err(ChordsmithError::new(format!("invalid fret '{ch}'"))),
+                .ok_or_else(|| ChordClawError::new(format!("invalid fret '{ch}'")))?,
+            _ => return Err(ChordClawError::new(format!("invalid fret '{ch}'"))),
         };
     }
 
@@ -929,7 +929,7 @@ fn parse_compact_fingering(input: &str, string_count: usize) -> Result<Fingering
     })
 }
 
-fn parse_dashed_fingering(input: &str, string_count: usize) -> Result<Fingering, ChordsmithError> {
+fn parse_dashed_fingering(input: &str, string_count: usize) -> Result<Fingering, ChordClawError> {
     let mut frets = [None; MAX_STRING_COUNT];
     let parts = input.split('-').collect::<Vec<_>>();
     validate_count(parts.len(), Some(string_count), "strings")?;
@@ -941,9 +941,9 @@ fn parse_dashed_fingering(input: &str, string_count: usize) -> Result<Fingering,
         } else {
             let fret = token
                 .parse::<u8>()
-                .map_err(|_| ChordsmithError::new(format!("invalid fret '{token}'")))?;
+                .map_err(|_| ChordClawError::new(format!("invalid fret '{token}'")))?;
             if fret > MAX_STANDARD_FRET {
-                return Err(ChordsmithError::new(format!(
+                return Err(ChordClawError::new(format!(
                     "invalid fret '{fret}': standard guitar range is 0..={MAX_STANDARD_FRET}"
                 )));
             }
@@ -957,11 +957,11 @@ fn parse_dashed_fingering(input: &str, string_count: usize) -> Result<Fingering,
     })
 }
 
-fn validate_exact_string_count(string_count: usize) -> Result<(), ChordsmithError> {
+fn validate_exact_string_count(string_count: usize) -> Result<(), ChordClawError> {
     if is_supported_string_count(string_count) {
         Ok(())
     } else {
-        Err(ChordsmithError::new(format!(
+        Err(ChordClawError::new(format!(
             "expected 4, 6, 7, or 8 strings, got {string_count}"
         )))
     }
@@ -971,7 +971,7 @@ fn validate_string_count(
     count: usize,
     expected: Option<usize>,
     label: &str,
-) -> Result<(), ChordsmithError> {
+) -> Result<(), ChordClawError> {
     validate_count(count, expected, label)
 }
 
@@ -979,14 +979,14 @@ fn validate_count(
     count: usize,
     expected: Option<usize>,
     label: &str,
-) -> Result<(), ChordsmithError> {
+) -> Result<(), ChordClawError> {
     match expected {
-        Some(expected) if count != expected => Err(ChordsmithError::new(format!(
+        Some(expected) if count != expected => Err(ChordClawError::new(format!(
             "expected {expected} {label}, got {count}"
         ))),
         Some(_) => Ok(()),
         None if is_supported_string_count(count) => Ok(()),
-        None => Err(ChordsmithError::new(format!(
+        None => Err(ChordClawError::new(format!(
             "expected 4, 6, 7, or 8 {label}, got {count}"
         ))),
     }

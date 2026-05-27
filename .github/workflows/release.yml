@@ -56,17 +56,17 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Build
-        run: cargo build --release --locked -p chordsmith-cli
+        run: cargo build --release --locked -p chordclaw-cli
 
       - name: Package
         run: |
-          version="$(bash ./scripts/chordsmith-version.sh)"
+          version="$(bash ./scripts/chordclaw-version.sh)"
           os="$(uname -s | tr '[:upper:]' '[:lower:]')"
           arch="$(uname -m)"
-          asset="chordsmith-v${version}-${os}-${arch}"
-          dist="$RUNNER_TEMP/chordsmith-release"
+          asset="chordclaw-v${version}-${os}-${arch}"
+          dist="$RUNNER_TEMP/chordclaw-release"
           mkdir -p "$dist/$asset"
-          cp target/release/chordsmith "$dist/$asset/chordsmith"
+          cp target/release/chordclaw "$dist/$asset/chordclaw"
           tar -C "$dist" -czf "$dist/$asset.tar.gz" "$asset"
           shasum -a 256 "$dist/$asset.tar.gz" | tee "$dist/$asset.tar.gz.sha256"
           echo "RELEASE_ASSET=$dist/$asset.tar.gz" >> "$GITHUB_ENV"

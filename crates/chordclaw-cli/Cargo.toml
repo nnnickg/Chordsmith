@@ -1,5 +1,5 @@
 [package]
-name = "chordsmith-cli"
+name = "chordclaw-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,11 +8,11 @@ homepage.workspace = true
 publish = false
 
 [[bin]]
-name = "chordsmith"
+name = "chordclaw"
 path = "src/main.rs"
 
 [dependencies]
-chordsmith-core.workspace = true
+chordclaw-core.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 serde.workspace = true

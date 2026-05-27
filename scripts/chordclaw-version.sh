@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root_dir="$(cd "$script_dir/.." && pwd)"
-package="${1:-chordsmith-cli}"
+package="${1:-chordclaw-cli}"
 
 package_id="$(cargo pkgid --manifest-path "$root_dir/Cargo.toml" -p "$package")"
 

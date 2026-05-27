@@ -4,14 +4,14 @@ set -euo pipefail
 release_tag="${1:-${RELEASE_TAG:-}}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 packages=(
-  chordsmith-core
-  chordsmith-cli
+  chordclaw-core
+  chordclaw-cli
 )
 
 workspace_version=""
 
 for package in "${packages[@]}"; do
-  package_version="$("$script_dir/chordsmith-version.sh" "$package")"
+  package_version="$("$script_dir/chordclaw-version.sh" "$package")"
 
   if [[ -z "$workspace_version" ]]; then
     workspace_version="$package_version"

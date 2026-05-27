@@ -6,7 +6,7 @@ use crate::notes::{NoteLetter, NoteName};
 use crate::symbol::{
     Alteration, ChordSpec, Extension, Quality, Seventh, alteration_prefix, is_supported_alteration,
 };
-use crate::{ChordsmithError, MAX_NOTE_ACCIDENTALS};
+use crate::{ChordClawError, MAX_NOTE_ACCIDENTALS};
 
 pub(crate) fn normalize_chart_glyphs(input: &str) -> Cow<'_, str> {
     if !input
@@ -30,13 +30,13 @@ pub(crate) fn normalize_chart_glyphs(input: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-pub(crate) fn parse_note_prefix(input: &str) -> Result<(NoteName, &str), ChordsmithError> {
+pub(crate) fn parse_note_prefix(input: &str) -> Result<(NoteName, &str), ChordClawError> {
     let mut chars = input.char_indices();
     let Some((_, first)) = chars.next() else {
-        return Err(ChordsmithError::new("empty note"));
+        return Err(ChordClawError::new("empty note"));
     };
     let Some(letter) = NoteLetter::from_ascii(first) else {
-        return Err(ChordsmithError::new(format!("invalid note root '{first}'")));
+        return Err(ChordClawError::new(format!("invalid note root '{first}'")));
     };
 
     let mut accidental = 0i8;
@@ -51,12 +51,12 @@ pub(crate) fn parse_note_prefix(input: &str) -> Result<(NoteName, &str), Chordsm
                 accidental_kind = Some(ch);
                 let step = if ch == '#' { 1 } else { -1 };
                 let Some(next) = accidental.checked_add(step) else {
-                    return Err(ChordsmithError::new(format!(
+                    return Err(ChordClawError::new(format!(
                         "too many accidentals in note '{input}'"
                     )));
                 };
                 if next.unsigned_abs() > MAX_NOTE_ACCIDENTALS {
-                    return Err(ChordsmithError::new(format!(
+                    return Err(ChordClawError::new(format!(
                         "too many accidentals in note '{input}'"
                     )));
                 }
@@ -70,14 +70,14 @@ pub(crate) fn parse_note_prefix(input: &str) -> Result<(NoteName, &str), Chordsm
     Ok((NoteName { letter, accidental }, &input[end..]))
 }
 
-pub(crate) fn split_bass(rest: &str) -> Result<(&str, Option<NoteName>), ChordsmithError> {
+pub(crate) fn split_bass(rest: &str) -> Result<(&str, Option<NoteName>), ChordClawError> {
     let mut bass_idx = None;
     for (idx, ch) in rest.char_indices() {
         if ch != '/' || is_six_nine_slash(rest, idx) {
             continue;
         }
         if bass_idx.replace(idx).is_some() {
-            return Err(ChordsmithError::new(format!(
+            return Err(ChordClawError::new(format!(
                 "invalid slash chord syntax '{rest}'"
             )));
         }
@@ -88,13 +88,13 @@ pub(crate) fn split_bass(rest: &str) -> Result<(&str, Option<NoteName>), Chordsm
     };
     let after = &rest[idx + 1..];
     if after.is_empty() {
-        return Err(ChordsmithError::new("slash chord is missing bass note"));
+        return Err(ChordClawError::new("slash chord is missing bass note"));
     }
     let Some(first) = after.chars().next() else {
-        return Err(ChordsmithError::new("slash chord is missing bass note"));
+        return Err(ChordClawError::new("slash chord is missing bass note"));
     };
     if NoteLetter::from_ascii(first).is_none() {
-        return Err(ChordsmithError::new(format!(
+        return Err(ChordClawError::new(format!(
             "invalid slash chord bass '{after}'"
         )));
     }
@@ -110,7 +110,7 @@ fn is_six_nine_slash(input: &str, slash_idx: usize) -> bool {
         && bytes[slash_idx + 1] == b'9'
 }
 
-pub(crate) fn parse_descriptor(input: &str) -> Result<ChordSpec, ChordsmithError> {
+pub(crate) fn parse_descriptor(input: &str) -> Result<ChordSpec, ChordClawError> {
     let text = normalize_descriptor_text(input)?;
 
     let mut spec = ChordSpec::default();
@@ -258,7 +258,7 @@ pub(crate) fn parse_descriptor(input: &str) -> Result<ChordSpec, ChordsmithError
             upsert_alteration(&mut spec.alterations, alteration);
             rest = next;
         } else {
-            return Err(ChordsmithError::new(format!(
+            return Err(ChordClawError::new(format!(
                 "unknown chord descriptor near '{rest}'"
             )));
         }
@@ -269,7 +269,7 @@ pub(crate) fn parse_descriptor(input: &str) -> Result<ChordSpec, ChordsmithError
     Ok(spec)
 }
 
-fn normalize_descriptor_text(input: &str) -> Result<Cow<'_, str>, ChordsmithError> {
+fn normalize_descriptor_text(input: &str) -> Result<Cow<'_, str>, ChordClawError> {
     if !input
         .chars()
         .any(|ch| ch.is_whitespace() || ch == '(' || ch == ')')
@@ -281,7 +281,7 @@ fn normalize_descriptor_text(input: &str) -> Result<Cow<'_, str>, ChordsmithErro
     let mut chars = input.char_indices().peekable();
     while let Some((idx, ch)) = chars.next() {
         if ch.is_whitespace() {
-            return Err(ChordsmithError::new(format!(
+            return Err(ChordClawError::new(format!(
                 "invalid chord descriptor: whitespace inside '{input}'"
             )));
         }
@@ -289,7 +289,7 @@ fn normalize_descriptor_text(input: &str) -> Result<Cow<'_, str>, ChordsmithErro
             '(' => {
                 let start = idx + ch.len_utf8();
                 let Some((end, _)) = chars.by_ref().find(|(_, inner)| *inner == ')') else {
-                    return Err(ChordsmithError::new(format!(
+                    return Err(ChordClawError::new(format!(
                         "invalid chord descriptor: unclosed '(' in '{input}'"
                     )));
                 };
@@ -300,14 +300,14 @@ fn normalize_descriptor_text(input: &str) -> Result<Cow<'_, str>, ChordsmithErro
                         .any(|inner| inner.is_whitespace() || inner == '(' || inner == ')')
                     || !parenthesized_descriptor_group_is_valid(group)
                 {
-                    return Err(ChordsmithError::new(format!(
+                    return Err(ChordClawError::new(format!(
                         "invalid chord descriptor group '({group})'"
                     )));
                 }
                 out.push_str(group);
             }
             ')' => {
-                return Err(ChordsmithError::new(format!(
+                return Err(ChordClawError::new(format!(
                     "invalid chord descriptor: unmatched ')' in '{input}'"
                 )));
             }
@@ -348,13 +348,13 @@ fn take_descriptor_token(input: &str) -> Option<&str> {
     take_alteration(input).map(|(_, next)| next)
 }
 
-fn duplicate_descriptor(token: &str) -> ChordsmithError {
-    ChordsmithError::new(format!(
+fn duplicate_descriptor(token: &str) -> ChordClawError {
+    ChordClawError::new(format!(
         "invalid chord descriptor: duplicate or conflicting '{token}'"
     ))
 }
 
-fn reject_numbered_harmony(spec: &ChordSpec, token: &str) -> Result<(), ChordsmithError> {
+fn reject_numbered_harmony(spec: &ChordSpec, token: &str) -> Result<(), ChordClawError> {
     if spec.alt || spec.sixth || spec.seventh != Seventh::None || spec.extension.is_some() {
         Err(duplicate_descriptor(token))
     } else {
@@ -367,7 +367,7 @@ fn set_extension(
     extension: Extension,
     seventh: Seventh,
     token: &str,
-) -> Result<(), ChordsmithError> {
+) -> Result<(), ChordClawError> {
     reject_numbered_harmony(spec, token)?;
     spec.seventh = seventh;
     spec.extension = Some(extension);
@@ -380,7 +380,7 @@ fn set_extension_or_half_diminished_extension(
     extension: Extension,
     seventh: Seventh,
     token: &str,
-) -> Result<(), ChordsmithError> {
+) -> Result<(), ChordClawError> {
     if *half_diminished_can_extend && is_half_diminished_shorthand_base(spec) {
         spec.extension = Some(extension);
         *half_diminished_can_extend = false;
@@ -390,19 +390,19 @@ fn set_extension_or_half_diminished_extension(
     set_extension(spec, extension, seventh, token)
 }
 
-fn set_seventh(spec: &mut ChordSpec, seventh: Seventh, token: &str) -> Result<(), ChordsmithError> {
+fn set_seventh(spec: &mut ChordSpec, seventh: Seventh, token: &str) -> Result<(), ChordClawError> {
     reject_numbered_harmony(spec, token)?;
     spec.seventh = seventh;
     Ok(())
 }
 
-fn set_sixth(spec: &mut ChordSpec) -> Result<(), ChordsmithError> {
+fn set_sixth(spec: &mut ChordSpec) -> Result<(), ChordClawError> {
     reject_numbered_harmony(spec, "6")?;
     spec.sixth = true;
     Ok(())
 }
 
-fn set_six_nine(spec: &mut ChordSpec) -> Result<(), ChordsmithError> {
+fn set_six_nine(spec: &mut ChordSpec) -> Result<(), ChordClawError> {
     reject_numbered_harmony(spec, "6/9")?;
     spec.sixth = true;
     push_unique_descriptor(&mut spec.adds, 9, "add9")?;
@@ -413,7 +413,7 @@ pub(crate) fn push_unique_descriptor<const N: usize>(
     values: &mut InlineVec<u8, N>,
     value: u8,
     token: &str,
-) -> Result<(), ChordsmithError> {
+) -> Result<(), ChordClawError> {
     if values.contains(&value) {
         return Err(duplicate_descriptor(token));
     }
@@ -426,7 +426,7 @@ fn set_quality(
     explicit_quality: &mut bool,
     quality: Quality,
     token: &str,
-) -> Result<(), ChordsmithError> {
+) -> Result<(), ChordClawError> {
     if *explicit_quality {
         return Err(duplicate_descriptor(token));
     }
@@ -439,7 +439,7 @@ fn set_half_diminished(
     spec: &mut ChordSpec,
     explicit_quality: &mut bool,
     token: &str,
-) -> Result<(), ChordsmithError> {
+) -> Result<(), ChordClawError> {
     if *explicit_quality
         || spec.seventh != Seventh::None
         || spec.extension.is_some()
@@ -480,7 +480,7 @@ fn is_half_diminished_shorthand_base(spec: &ChordSpec) -> bool {
             }]
 }
 
-pub(crate) fn validate_descriptor(spec: &ChordSpec) -> Result<(), ChordsmithError> {
+pub(crate) fn validate_descriptor(spec: &ChordSpec) -> Result<(), ChordClawError> {
     if spec.quality == Quality::Power
         && (spec.seventh != Seventh::None
             || spec.extension.is_some()
@@ -490,7 +490,7 @@ pub(crate) fn validate_descriptor(spec: &ChordSpec) -> Result<(), ChordsmithErro
             || !spec.alterations.is_empty()
             || !spec.omissions.is_empty())
     {
-        return Err(ChordsmithError::new(
+        return Err(ChordClawError::new(
             "invalid chord descriptor: power chords cannot be combined with other chord tones",
         ));
     }
@@ -504,7 +504,7 @@ pub(crate) fn validate_descriptor(spec: &ChordSpec) -> Result<(), ChordsmithErro
             || !spec.alterations.is_empty()
             || !spec.omissions.is_empty())
     {
-        return Err(ChordsmithError::new(
+        return Err(ChordClawError::new(
             "invalid chord descriptor: alt is already a complete altered dominant set",
         ));
     }
@@ -514,7 +514,7 @@ pub(crate) fn validate_descriptor(spec: &ChordSpec) -> Result<(), ChordsmithErro
         .iter()
         .find(|alteration| !is_supported_alteration(alteration.degree, alteration.accidental))
     {
-        return Err(ChordsmithError::new(format!(
+        return Err(ChordClawError::new(format!(
             "invalid chord descriptor: unsupported alteration '{}{}'",
             alteration_prefix(alteration.accidental),
             alteration.degree
@@ -528,7 +528,7 @@ pub(crate) fn validate_descriptor(spec: &ChordSpec) -> Result<(), ChordsmithErro
             .iter()
             .any(|alteration| alteration.degree == degree)
         {
-            return Err(ChordsmithError::new(format!(
+            return Err(ChordClawError::new(format!(
                 "invalid chord descriptor: extension {degree} cannot also be altered"
             )));
         }
@@ -539,7 +539,7 @@ pub(crate) fn validate_descriptor(spec: &ChordSpec) -> Result<(), ChordsmithErro
         .iter()
         .find(|alteration| spec.adds.contains(&alteration.degree))
     {
-        return Err(ChordsmithError::new(format!(
+        return Err(ChordClawError::new(format!(
             "invalid chord descriptor: added degree {} cannot also be altered",
             alteration.degree
         )));
@@ -550,7 +550,7 @@ pub(crate) fn validate_descriptor(spec: &ChordSpec) -> Result<(), ChordsmithErro
     Ok(())
 }
 
-fn validate_explicit_omissions(spec: &ChordSpec) -> Result<(), ChordsmithError> {
+fn validate_explicit_omissions(spec: &ChordSpec) -> Result<(), ChordClawError> {
     if spec.omissions.is_empty() {
         return Ok(());
     }
@@ -558,7 +558,7 @@ fn validate_explicit_omissions(spec: &ChordSpec) -> Result<(), ChordsmithError> 
     let raw = raw_tones_without_omissions(spec);
     for omission in &spec.omissions {
         if !raw.iter().any(|tone| tone.degree == *omission) {
-            return Err(ChordsmithError::new(format!(
+            return Err(ChordClawError::new(format!(
                 "invalid chord descriptor: cannot omit absent degree {omission}"
             )));
         }
@@ -569,7 +569,7 @@ fn validate_explicit_omissions(spec: &ChordSpec) -> Result<(), ChordsmithError> 
         .filter(|tone| !spec.omissions.contains(&tone.degree))
         .count();
     if remaining < 2 {
-        return Err(ChordsmithError::new(
+        return Err(ChordClawError::new(
             "invalid chord descriptor: omissions remove too much harmonic content",
         ));
     }

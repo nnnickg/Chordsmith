@@ -1,20 +1,20 @@
-# Chordsmith
+# ChordClaw
 
-Chordsmith is a local Rust chord engine for guitar, extended-range guitar, and
+ChordClaw is a local Rust chord engine for guitar, extended-range guitar, and
 ukulele. It identifies chords from fingerings and generates voicings from
 interval math instead of a chord-shape database.
 
 ```sh
-chordsmith --version
-chordsmith identify 022000
-chordsmith identify --instrument guitar7 0000000
-chordsmith identify --instrument ukulele 2010
-chordsmith voicings Em
+chordclaw --version
+chordclaw identify 022000
+chordclaw identify --instrument guitar7 0000000
+chordclaw identify --instrument ukulele 2010
+chordclaw voicings Em
 ```
 
 ## Status
 
-Version 1.3.4. The engine separates chord theory from CLI formatting, uses
+Version 1.3.5. The engine separates chord theory from CLI formatting, uses
 deterministic ranking, and treats chord names as analyses over pitch-class sets
 rather than as chart entries.
 
@@ -24,51 +24,51 @@ crates are not published to crates.io.
 ## Quick Start
 
 ```sh
-cargo build --release -p chordsmith-cli
-./target/release/chordsmith identify 022000
-./target/release/chordsmith voicings C6/9
+cargo build --release -p chordclaw-cli
+./target/release/chordclaw identify 022000
+./target/release/chordclaw voicings C6/9
 ```
 
 Install on your PATH:
 
 ```sh
-cargo install --path crates/chordsmith-cli
-chordsmith --help
+cargo install --path crates/chordclaw-cli
+chordclaw --help
 ```
 
 ## CLI
 
 ```sh
 # Identify a low-to-high guitar fingering.
-chordsmith identify 022000
-chordsmith identify 10-x-11-9-8-x
-chordsmith identify --tuning DADGAD 000000
-chordsmith identify --instrument guitar7 0000000
-chordsmith identify --tuning F#BEADGBE 00000000
+chordclaw identify 022000
+chordclaw identify 10-x-11-9-8-x
+chordclaw identify --tuning DADGAD 000000
+chordclaw identify --instrument guitar7 0000000
+chordclaw identify --tuning F#BEADGBE 00000000
 
 # Identify standard high-G ukulele string-order fingerings.
-chordsmith identify --instrument ukulele 2010
-chordsmith identify --tuning GCEA 0003
-chordsmith identify --instrument ukulele --tuning G3,C4,E4,A4 0000
+chordclaw identify --instrument ukulele 2010
+chordclaw identify --tuning GCEA 0003
+chordclaw identify --instrument ukulele --tuning G3,C4,E4,A4 0000
 
 # Emit structured output.
-chordsmith identify --json x12010
+chordclaw identify --json x12010
 
 # Generate guitar voicings from a chord symbol.
-chordsmith voicings Em
-chordsmith voicings --tuning D,A,D,G,A,D Dsus4
-chordsmith voicings --max-fret 15 --limit 25 C13b9
-chordsmith voicings --min-fret 12 C
-chordsmith voicings --min-fret 12 --max-fret 15 C
-chordsmith voicings --all C
-chordsmith voicings Calt
+chordclaw voicings Em
+chordclaw voicings --tuning D,A,D,G,A,D Dsus4
+chordclaw voicings --max-fret 15 --limit 25 C13b9
+chordclaw voicings --min-fret 12 C
+chordclaw voicings --min-fret 12 --max-fret 15 C
+chordclaw voicings --all C
+chordclaw voicings Calt
 
 # Generate ukulele voicings.
-chordsmith voicings --instrument ukulele C
-chordsmith voicings --tuning GCEA Am
+chordclaw voicings --instrument ukulele C
+chordclaw voicings --tuning GCEA Am
 
 # Show parsed interval content for a chord symbol.
-chordsmith analyze C7#9#11
+chordclaw analyze C7#9#11
 ```
 
 `--instrument` accepts `guitar`, `guitar7`, `guitar8`, or `ukulele`; six-string
@@ -101,8 +101,8 @@ Engine invariants are documented in [docs/engine.md](docs/engine.md).
 cargo fmt --all --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo llvm-cov -p chordsmith-core --lib --locked --summary-only --fail-under-lines 90
-cargo bench -p chordsmith-core --bench perf --locked
+cargo llvm-cov -p chordclaw-core --lib --locked --summary-only --fail-under-lines 90
+cargo bench -p chordclaw-core --bench perf --locked
 cargo deny check
 ```
 

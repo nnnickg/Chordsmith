@@ -1,8 +1,8 @@
 use std::process::ExitCode;
 use std::{fmt, io};
 
-use chordsmith_core::{
-    AnalysisClass, ChordsmithError, ChordsmithErrorKind, DEFAULT_LIMIT, DEFAULT_MAX_FRET,
+use chordclaw_core::{
+    AnalysisClass, ChordClawError, ChordClawErrorKind, DEFAULT_LIMIT, DEFAULT_MAX_FRET,
     DEFAULT_MAX_SPAN, DEFAULT_MIN_FRET, GuitarTuning, IdentifyResult, Instrument, MAX_LIMIT,
     MAX_STANDARD_FRET, VoicingMode, VoicingOptions, analyze_symbol, identify_with_tuning,
     voicings_with_tuning,
@@ -53,34 +53,34 @@ fn run() -> Result<ExitCode, CliError> {
 
 #[derive(Debug)]
 enum CliError {
-    Core(ChordsmithError),
+    Core(ChordClawError),
     Message {
-        kind: ChordsmithErrorKind,
+        kind: ChordClawErrorKind,
         message: String,
     },
 }
 
 impl CliError {
     fn data(message: impl Into<String>) -> Self {
-        Self::message(ChordsmithErrorKind::Data, message)
+        Self::message(ChordClawErrorKind::Data, message)
     }
 
     fn usage(message: impl Into<String>) -> Self {
-        Self::message(ChordsmithErrorKind::Usage, message)
+        Self::message(ChordClawErrorKind::Usage, message)
     }
 
     fn internal(message: impl Into<String>) -> Self {
-        Self::message(ChordsmithErrorKind::Internal, message)
+        Self::message(ChordClawErrorKind::Internal, message)
     }
 
-    fn message(kind: ChordsmithErrorKind, message: impl Into<String>) -> Self {
+    fn message(kind: ChordClawErrorKind, message: impl Into<String>) -> Self {
         Self::Message {
             kind,
             message: message.into(),
         }
     }
 
-    fn kind(&self) -> ChordsmithErrorKind {
+    fn kind(&self) -> ChordClawErrorKind {
         match self {
             Self::Core(error) => error.kind(),
             Self::Message { kind, .. } => *kind,
@@ -89,9 +89,9 @@ impl CliError {
 
     fn exit_code(&self) -> u8 {
         match self.kind() {
-            ChordsmithErrorKind::Data => 65,
-            ChordsmithErrorKind::Usage => 2,
-            ChordsmithErrorKind::Internal => 1,
+            ChordClawErrorKind::Data => 65,
+            ChordClawErrorKind::Usage => 2,
+            ChordClawErrorKind::Internal => 1,
         }
     }
 }
@@ -105,14 +105,14 @@ impl fmt::Display for CliError {
     }
 }
 
-impl From<ChordsmithError> for CliError {
-    fn from(value: ChordsmithError) -> Self {
+impl From<ChordClawError> for CliError {
+    fn from(value: ChordClawError) -> Self {
         Self::Core(value)
     }
 }
 
 fn cli() -> Command {
-    Command::new("chordsmith")
+    Command::new("chordclaw")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Guitar and ukulele chord analysis and voicing CLI")
         .subcommand(
@@ -278,8 +278,8 @@ fn cmd_analyze(matches: &ArgMatches) -> Result<(), CliError> {
 }
 
 fn analysis_notes(
-    symbol: &chordsmith_core::ChordSymbol,
-    formula: &chordsmith_core::ChordFormula,
+    symbol: &chordclaw_core::ChordSymbol,
+    formula: &chordclaw_core::ChordFormula,
 ) -> Vec<String> {
     let mut notes = formula
         .tones()
@@ -298,8 +298,8 @@ fn analysis_notes(
 }
 
 fn analysis_intervals(
-    symbol: &chordsmith_core::ChordSymbol,
-    formula: &chordsmith_core::ChordFormula,
+    symbol: &chordclaw_core::ChordSymbol,
+    formula: &chordclaw_core::ChordFormula,
 ) -> Vec<String> {
     let mut intervals = formula
         .tones()
@@ -324,7 +324,7 @@ fn cmd_completions(matches: &ArgMatches) -> Result<(), CliError> {
         .map_err(|_| CliError::usage(format!("unsupported shell '{shell_text}'")))?;
     let mut command = cli();
     let mut stdout = io::stdout();
-    generate(shell, &mut command, "chordsmith", &mut stdout);
+    generate(shell, &mut command, "chordclaw", &mut stdout);
     Ok(())
 }
 
@@ -396,7 +396,7 @@ fn write_stdout(result: io::Result<()>) -> Result<(), CliError> {
 }
 
 fn print_analyze(
-    symbol: &chordsmith_core::ChordSymbol,
+    symbol: &chordclaw_core::ChordSymbol,
     notes: &[String],
     intervals: &[String],
 ) -> Result<(), CliError> {
@@ -448,7 +448,7 @@ fn print_identify(result: &IdentifyResult) -> Result<(), CliError> {
     Ok(())
 }
 
-fn print_voicings(results: &[chordsmith_core::Voicing]) -> Result<(), CliError> {
+fn print_voicings(results: &[chordclaw_core::Voicing]) -> Result<(), CliError> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
 

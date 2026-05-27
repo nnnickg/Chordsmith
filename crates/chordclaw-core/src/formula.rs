@@ -6,7 +6,7 @@ use serde::{Serialize, Serializer};
 use crate::inline_vec::InlineVec;
 use crate::notes::{NoteName, PitchClass, PitchSet};
 use crate::symbol::{ChordSpec, ChordSymbol, Extension, Quality, Seventh};
-use crate::{ChordsmithError, MAX_NOTE_ACCIDENTALS};
+use crate::{ChordClawError, MAX_NOTE_ACCIDENTALS};
 
 pub(crate) const MAX_FORMULA_TONES: usize = 16;
 
@@ -307,13 +307,13 @@ pub(crate) fn degree_letter_steps(degree: u8) -> u8 {
     }
 }
 
-pub fn analyze_symbol(input: &str) -> Result<(ChordSymbol, ChordFormula), ChordsmithError> {
+pub fn analyze_symbol(input: &str) -> Result<(ChordSymbol, ChordFormula), ChordClawError> {
     let symbol = ChordSymbol::parse(input)?;
     let formula = symbol.formula();
     Ok((symbol, formula))
 }
 
-pub(crate) fn reject_redundant_root_bass(symbol: &ChordSymbol) -> Result<(), ChordsmithError> {
+pub(crate) fn reject_redundant_root_bass(symbol: &ChordSymbol) -> Result<(), ChordClawError> {
     let Some(bass) = symbol.bass else {
         return Ok(());
     };
@@ -321,7 +321,7 @@ pub(crate) fn reject_redundant_root_bass(symbol: &ChordSymbol) -> Result<(), Cho
         return Ok(());
     }
 
-    Err(ChordsmithError::new(format!(
+    Err(ChordClawError::new(format!(
         "invalid slash chord bass '{}': bass repeats root; use '{}{}'",
         bass,
         symbol.root,
@@ -332,7 +332,7 @@ pub(crate) fn reject_redundant_root_bass(symbol: &ChordSymbol) -> Result<(), Cho
 pub(crate) fn reject_enharmonic_chord_tone_bass(
     symbol: &ChordSymbol,
     formula: &ChordFormula,
-) -> Result<(), ChordsmithError> {
+) -> Result<(), ChordClawError> {
     let Some(bass) = symbol.bass else {
         return Ok(());
     };
@@ -344,7 +344,7 @@ pub(crate) fn reject_enharmonic_chord_tone_bass(
         return Ok(());
     }
 
-    Err(ChordsmithError::new(format!(
+    Err(ChordClawError::new(format!(
         "invalid slash chord bass '{bass_text}': use chord-tone spelling '{}'",
         tone.note
     )))
@@ -353,33 +353,33 @@ pub(crate) fn reject_enharmonic_chord_tone_bass(
 pub(crate) fn reject_redundant_formula(
     symbol: &ChordSymbol,
     formula: &ChordFormula,
-) -> Result<(), ChordsmithError> {
+) -> Result<(), ChordClawError> {
     if has_alt_modifiers(&symbol.spec) {
-        return Err(ChordsmithError::new(format!(
+        return Err(ChordClawError::new(format!(
             "invalid chord symbol '{}': alt is already a complete altered dominant set",
             symbol.name()
         )));
     }
     if has_omitted_alteration(&symbol.spec) {
-        return Err(ChordsmithError::new(format!(
+        return Err(ChordClawError::new(format!(
             "redundant chord symbol '{}': altered degree is also omitted",
             symbol.name()
         )));
     }
     if has_redundant_alteration(&symbol.spec) {
-        return Err(ChordsmithError::new(format!(
+        return Err(ChordClawError::new(format!(
             "redundant chord symbol '{}': alteration restates an existing interval",
             symbol.name()
         )));
     }
     if formula.has_duplicate_pitch_classes() {
-        return Err(ChordsmithError::new(format!(
+        return Err(ChordClawError::new(format!(
             "redundant chord symbol '{}': two or more intervals resolve to the same pitch class",
             symbol.name()
         )));
     }
     if formula.has_spelling_outside_double_accidentals() {
-        return Err(ChordsmithError::new(format!(
+        return Err(ChordClawError::new(format!(
             "invalid chord symbol '{}': formula spelling requires accidentals beyond double sharps or flats",
             symbol.name()
         )));

@@ -3,7 +3,7 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use chordsmith_core::{
+use chordclaw_core::{
     GuitarTuning, Instrument, VoicingMode, VoicingOptions, analyze_symbol, identify, voicings,
     voicings_with_tuning,
 };

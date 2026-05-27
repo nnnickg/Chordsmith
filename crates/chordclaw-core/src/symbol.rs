@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use serde::Serialize;
 
-use crate::ChordsmithError;
+use crate::ChordClawError;
 use crate::formula::{
     ChordFormula, reject_enharmonic_chord_tone_bass, reject_redundant_formula,
     reject_redundant_root_bass,
@@ -48,14 +48,14 @@ pub struct Alteration {
 }
 
 impl Alteration {
-    pub fn new(degree: u8, accidental: i8) -> Result<Self, ChordsmithError> {
+    pub fn new(degree: u8, accidental: i8) -> Result<Self, ChordClawError> {
         if !matches!(degree, 5 | 9 | 11 | 13) {
-            return Err(ChordsmithError::new(format!(
+            return Err(ChordClawError::new(format!(
                 "invalid alteration degree '{degree}'"
             )));
         }
         if !is_supported_alteration(degree, accidental) {
-            return Err(ChordsmithError::new(format!(
+            return Err(ChordClawError::new(format!(
                 "unsupported alteration '{}{}'",
                 alteration_prefix(accidental),
                 degree
@@ -279,11 +279,11 @@ pub struct ChordSymbol {
 }
 
 impl ChordSymbol {
-    pub fn parse(input: &str) -> Result<Self, ChordsmithError> {
+    pub fn parse(input: &str) -> Result<Self, ChordClawError> {
         let normalized = normalize_chart_glyphs(input);
         let trimmed = normalized.trim();
         if trimmed.is_empty() {
-            return Err(ChordsmithError::new("empty chord symbol"));
+            return Err(ChordClawError::new("empty chord symbol"));
         }
 
         let (root, rest) = parse_note_prefix(trimmed)?;
@@ -298,7 +298,7 @@ impl ChordSymbol {
         ChordFormula::from_parts(self.root, &self.spec)
     }
 
-    fn validate(&self) -> Result<(), ChordsmithError> {
+    fn validate(&self) -> Result<(), ChordClawError> {
         let formula = self.formula();
         reject_redundant_root_bass(self)?;
         reject_enharmonic_chord_tone_bass(self, &formula)?;

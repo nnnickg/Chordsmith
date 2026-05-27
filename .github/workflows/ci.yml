@@ -40,7 +40,7 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Benchmark Contract
-        run: cargo bench -p chordsmith-core --bench perf --locked
+        run: cargo bench -p chordclaw-core --bench perf --locked
 
   coverage:
     name: Core Coverage
@@ -57,8 +57,8 @@ jobs:
       - name: Install Coverage Tool
         run: cargo install cargo-llvm-cov --version 0.8.6 --locked
 
-      - name: chordsmith-core Line Coverage
-        run: cargo llvm-cov -p chordsmith-core --lib --locked --summary-only --fail-under-lines 90
+      - name: chordclaw-core Line Coverage
+        run: cargo llvm-cov -p chordclaw-core --lib --locked --summary-only --fail-under-lines 90
 
   macos:
     name: macOS
@@ -94,12 +94,12 @@ jobs:
         run: cargo deny check
 
       - name: Release Build
-        run: cargo build --release --locked -p chordsmith-cli
+        run: cargo build --release --locked -p chordclaw-cli
 
       - name: CLI Smoke
         run: |
-          target/release/chordsmith identify 022000
-          target/release/chordsmith analyze C7#9#11
-          target/release/chordsmith voicings --limit 5 C
-          target/release/chordsmith voicings --all C >/dev/null
-          target/release/chordsmith completions zsh >/dev/null
+          target/release/chordclaw identify 022000
+          target/release/chordclaw analyze C7#9#11
+          target/release/chordclaw voicings --limit 5 C
+          target/release/chordclaw voicings --all C >/dev/null
+          target/release/chordclaw completions zsh >/dev/null

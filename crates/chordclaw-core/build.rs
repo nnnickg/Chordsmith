@@ -8,42 +8,42 @@ use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum ChordsmithErrorKind {
+pub enum ChordClawErrorKind {
     Data,
     Usage,
     Internal,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ChordsmithError {
-    kind: ChordsmithErrorKind,
+pub struct ChordClawError {
+    kind: ChordClawErrorKind,
     message: String,
 }
 
-impl ChordsmithError {
+impl ChordClawError {
     pub(crate) fn new(message: impl Into<String>) -> Self {
-        Self::with_kind(ChordsmithErrorKind::Data, message)
+        Self::with_kind(ChordClawErrorKind::Data, message)
     }
 
-    pub fn with_kind(kind: ChordsmithErrorKind, message: impl Into<String>) -> Self {
+    pub fn with_kind(kind: ChordClawErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
             message: message.into(),
         }
     }
 
-    pub const fn kind(&self) -> ChordsmithErrorKind {
+    pub const fn kind(&self) -> ChordClawErrorKind {
         self.kind
     }
 }
 
-impl fmt::Display for ChordsmithError {
+impl fmt::Display for ChordClawError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
     }
 }
 
-impl std::error::Error for ChordsmithError {}
+impl std::error::Error for ChordClawError {}
 
 pub const GUITAR_STRING_COUNT: usize = 6;
 pub const GUITAR7_STRING_COUNT: usize = 7;

@@ -11,7 +11,7 @@ use crate::notes::{
     STANDARD_TUNING, play_fingering_core,
 };
 use crate::symbol::{Alteration, ChordSpec, Extension, MAX_OMISSIONS, Quality, Seventh};
-use crate::{ChordsmithError, MAX_NOTE_ACCIDENTALS};
+use crate::{ChordClawError, MAX_NOTE_ACCIDENTALS};
 
 const MAX_IDENTIFY_ANALYSES: usize = 25;
 
@@ -49,35 +49,35 @@ pub struct IdentifyResult {
     pub aliases: Vec<ChordAnalysis>,
 }
 
-pub fn identify(input: &str) -> Result<IdentifyResult, ChordsmithError> {
+pub fn identify(input: &str) -> Result<IdentifyResult, ChordClawError> {
     identify_with_tuning(input, STANDARD_TUNING)
 }
 
 pub fn identify_with_tuning(
     input: &str,
     tuning: GuitarTuning,
-) -> Result<IdentifyResult, ChordsmithError> {
+) -> Result<IdentifyResult, ChordClawError> {
     let fingering = Fingering::parse_with_string_count(input, tuning.string_count())?;
     identify_fingering_with_tuning_ref(&fingering, &tuning)
 }
 
-pub fn identify_fingering(fingering: &Fingering) -> Result<IdentifyResult, ChordsmithError> {
+pub fn identify_fingering(fingering: &Fingering) -> Result<IdentifyResult, ChordClawError> {
     identify_fingering_with_tuning_ref(fingering, &STANDARD_TUNING)
 }
 
 pub fn identify_fingering_with_tuning(
     fingering: &Fingering,
     tuning: GuitarTuning,
-) -> Result<IdentifyResult, ChordsmithError> {
+) -> Result<IdentifyResult, ChordClawError> {
     identify_fingering_with_tuning_ref(fingering, &tuning)
 }
 
 fn identify_fingering_with_tuning_ref(
     fingering: &Fingering,
     tuning: &GuitarTuning,
-) -> Result<IdentifyResult, ChordsmithError> {
+) -> Result<IdentifyResult, ChordClawError> {
     if fingering.string_count() != tuning.string_count() {
-        return Err(ChordsmithError::new(format!(
+        return Err(ChordClawError::new(format!(
             "fingering has {} strings but tuning has {}",
             fingering.string_count(),
             tuning.string_count()
