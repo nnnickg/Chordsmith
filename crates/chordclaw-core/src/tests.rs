@@ -207,6 +207,42 @@ fn supports_extended_range_guitar_tunings() {
 }
 
 #[test]
+fn maps_instruments_from_supported_string_counts() {
+    assert_eq!(
+        Instrument::from_string_count(4).unwrap(),
+        Instrument::Ukulele
+    );
+    assert_eq!(
+        Instrument::from_string_count(6).unwrap(),
+        Instrument::Guitar
+    );
+    assert_eq!(
+        Instrument::from_string_count(7).unwrap(),
+        Instrument::Guitar7
+    );
+    assert_eq!(
+        Instrument::from_string_count(8).unwrap(),
+        Instrument::Guitar8
+    );
+}
+
+#[test]
+fn counts_fingering_strings_without_parsing_frets() {
+    assert_eq!(Fingering::string_count_from_input("2010").unwrap(), 4);
+    assert_eq!(Fingering::string_count_from_input("x-0-10-3").unwrap(), 4);
+    assert_eq!(Fingering::string_count_from_input("0000000").unwrap(), 7);
+
+    let error =
+        Fingering::string_count_from_input("00000").expect_err("five-string fingering should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("expected 4, 6, 7, or 8 strings, got 5"),
+        "{error}"
+    );
+}
+
+#[test]
 fn rejects_unsupported_compact_tuning_count_after_octaves() {
     let error = Tuning::parse("C4C4C4C4C4C4C4C4C4")
         .expect_err("nine-string compact tuning should fail by string count");

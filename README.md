@@ -14,7 +14,7 @@ chordclaw voicings Em
 
 ## Status
 
-Version 1.4.0. The engine separates chord theory from CLI formatting, uses
+Version 1.4.1. The engine separates chord theory from CLI formatting, uses
 deterministic ranking, and treats chord names as analyses over pitch-class sets
 rather than as chart entries.
 
@@ -47,6 +47,7 @@ chordclaw identify --instrument guitar7 0000000
 chordclaw identify --tuning F#BEADGBE 00000000
 
 # Identify standard high-G ukulele string-order fingerings.
+chordclaw identify 2010
 chordclaw identify --instrument ukulele 2010
 chordclaw identify --tuning GCEA 0003
 chordclaw identify --instrument ukulele --tuning G3,C4,E4,A4 0000
@@ -75,10 +76,13 @@ chordclaw voicings --tuning GCEA Am
 chordclaw analyze C7#9#11
 ```
 
-`--instrument` accepts `guitar`, `guitar7`, `guitar8`, or `ukulele`; six-string
-guitar remains the default. `--tuning` accepts four-, six-, seven-, or
-eight-string note names either compact (`GCEA`, `DADGAD`, `BEADGBE`,
-`F#BEADGBE`, `EbAbDbGbBbEb`) or separated (`G,C,E,A`, `D,A,D,G,A,D`). Tuning
+`identify` infers its default instrument from fingering width when neither
+`--instrument` nor `--tuning` is passed: 4 strings is ukulele, 6 is guitar, 7 is
+guitar7, and 8 is guitar8. `voicings` defaults to six-string guitar.
+`--instrument` accepts `guitar`, `guitar7`, `guitar8`, or `ukulele`. `--tuning`
+accepts four-, six-, seven-, or eight-string note names either compact (`GCEA`,
+`DADGAD`, `BEADGBE`, `F#BEADGBE`, `EbAbDbGbBbEb`) or separated (`G,C,E,A`,
+`D,A,D,G,A,D`). Tuning
 notes may include octaves (`G3,C4,E4,A4`, `E2,A2,D3,G3,B3,E4`); when any
 octave is present, every tuning note must have one. Standard ukulele uses
 high-G re-entrant `GCEA`, and direct transpositions of that four-string interval

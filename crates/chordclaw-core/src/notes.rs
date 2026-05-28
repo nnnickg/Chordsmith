@@ -327,6 +327,18 @@ impl Instrument {
         }
     }
 
+    pub fn from_string_count(string_count: usize) -> Result<Self, ChordClawError> {
+        match string_count {
+            UKULELE_STRING_COUNT => Ok(Self::Ukulele),
+            GUITAR_STRING_COUNT => Ok(Self::Guitar),
+            GUITAR7_STRING_COUNT => Ok(Self::Guitar7),
+            GUITAR8_STRING_COUNT => Ok(Self::Guitar8),
+            _ => Err(ChordClawError::new(format!(
+                "expected 4, 6, 7, or 8 strings, got {string_count}"
+            ))),
+        }
+    }
+
     pub const fn string_count(self) -> usize {
         match self {
             Self::Guitar => GUITAR_STRING_COUNT,
@@ -870,6 +882,17 @@ impl Fingering {
         }
     }
 
+    pub fn string_count_from_input(input: &str) -> Result<usize, ChordClawError> {
+        let trimmed = input.trim();
+        let count = if trimmed.contains('-') {
+            trimmed.split('-').count()
+        } else {
+            trimmed.chars().count()
+        };
+        validate_count(count, None, "strings")?;
+        Ok(count)
+    }
+
     pub const fn string_count(&self) -> usize {
         self.string_count
     }
@@ -931,10 +954,9 @@ fn parse_compact_fingering(input: &str, string_count: usize) -> Result<Fingering
 
 fn parse_dashed_fingering(input: &str, string_count: usize) -> Result<Fingering, ChordClawError> {
     let mut frets = [None; MAX_STRING_COUNT];
-    let parts = input.split('-').collect::<Vec<_>>();
-    validate_count(parts.len(), Some(string_count), "strings")?;
+    validate_count(input.split('-').count(), Some(string_count), "strings")?;
 
-    for (idx, part) in parts.iter().enumerate() {
+    for (idx, part) in input.split('-').enumerate() {
         let token = part.trim();
         frets[idx] = if token.eq_ignore_ascii_case("x") {
             None

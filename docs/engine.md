@@ -6,6 +6,9 @@
 - The engine supports four-string ukulele plus six-, seven-, and eight-string
   guitar. Standard EADGBE guitar is the default; standard ukulele is high-G
   re-entrant GCEA.
+- CLI identification infers the default instrument from fingering width when no
+  explicit instrument or tuning is supplied: 4, 6, 7, or 8 strings map to
+  ukulele, guitar, guitar7, or guitar8.
 - Tuning may be note-only (`DADGAD`, `GCEA`) or octave-explicit
   (`G3,C4,E4,A4`). If any tuning note has an octave, all tuning notes must.
 - `x` means muted.

@@ -234,7 +234,7 @@ fn cmd_identify(matches: &ArgMatches) -> Result<(), CliError> {
     }
     let fingering_text = required_string(matches, "fingering")?;
     let instrument = optional_instrument(matches)?;
-    let tuning = optional_tuning(matches, instrument)?;
+    let tuning = identify_tuning(matches, instrument, fingering_text)?;
     let fingering = Fingering::parse_with_string_count(fingering_text, tuning.string_count())?;
     let result = identify_fingering_with_tuning(&fingering, tuning)?;
     if matches.get_flag("json") {
@@ -421,6 +421,25 @@ fn optional_tuning(
         },
         None => Ok(instrument.unwrap_or(Instrument::Guitar).default_tuning()),
     }
+}
+
+fn identify_tuning(
+    matches: &ArgMatches,
+    instrument: Option<Instrument>,
+    fingering_text: &str,
+) -> Result<GuitarTuning, CliError> {
+    if matches.get_one::<String>("tuning").is_some() {
+        return optional_tuning(matches, instrument);
+    }
+
+    let instrument = match instrument {
+        Some(instrument) => instrument,
+        None => {
+            let string_count = Fingering::string_count_from_input(fingering_text)?;
+            Instrument::from_string_count(string_count)?
+        }
+    };
+    Ok(instrument.default_tuning())
 }
 
 fn write_json<T: serde::Serialize>(value: &T) -> Result<(), CliError> {

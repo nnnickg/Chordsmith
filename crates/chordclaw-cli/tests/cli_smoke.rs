@@ -166,6 +166,28 @@ fn identify_accepts_extended_range_guitar_tuning() {
 }
 
 #[test]
+fn identify_infers_extended_range_guitar_from_fingering_width() {
+    let output = chordclaw()
+        .args(["identify", "0000000"])
+        .output()
+        .expect("run chordclaw identify inferred guitar7");
+
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Notes: B E A D G B E"));
+
+    let output = chordclaw()
+        .args(["identify", "00000000"])
+        .output()
+        .expect("run chordclaw identify inferred guitar8");
+
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Input: 00000000"));
+    assert!(stdout.contains("Notes: F#"));
+}
+
+#[test]
 fn identify_accepts_ukulele_instrument() {
     let output = chordclaw()
         .args(["identify", "--instrument", "ukulele", "2010"])
@@ -176,6 +198,34 @@ fn identify_accepts_ukulele_instrument() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Notes: A C F A"));
     assert!(stdout.contains("Primary: F"));
+}
+
+#[test]
+fn identify_infers_ukulele_from_fingering_width() {
+    let output = chordclaw()
+        .args(["identify", "2010"])
+        .output()
+        .expect("run chordclaw identify inferred ukulele");
+
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Notes: A C F A"));
+    assert!(stdout.contains("Primary: F"));
+}
+
+#[test]
+fn identify_explicit_instrument_keeps_string_count_validation() {
+    let output = chordclaw()
+        .args(["identify", "--instrument", "guitar", "2010"])
+        .output()
+        .expect("run chordclaw identify guitar with four strings");
+
+    assert_eq!(output.status.code(), Some(65));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("expected 6 strings, got 4"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
