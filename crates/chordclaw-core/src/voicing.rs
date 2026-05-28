@@ -6,7 +6,10 @@ use crate::inline_vec::InlineVec;
 use crate::notes::{
     Fingering, GuitarTuning, Instrument, NoteName, PitchClass, PitchSet, STANDARD_TUNING,
 };
-use crate::scoring::{rank_voicing_candidates, voicing_score_with_profile};
+use crate::scoring::{
+    VoicingScoreBreakdown, rank_voicing_candidates, voicing_score_breakdown_with_profile,
+    voicing_score_with_profile,
+};
 use crate::symbol::ChordSymbol;
 use crate::symbol::MAX_OMISSIONS;
 use crate::{
@@ -181,6 +184,107 @@ pub fn voicings_with_tuning(
     let ranked = rank_voicing_candidates(out, options);
 
     Ok(materialize_voicings(ranked, &search))
+}
+
+pub struct VoicingScoreContext {
+    tuning: GuitarTuning,
+    target: PitchSet,
+    formula_target: PitchSet,
+    bass_rule: BassRule,
+    formula: ChordFormula,
+}
+
+impl VoicingScoreContext {
+    pub fn new(input: &str, tuning: GuitarTuning) -> Result<Self, ChordClawError> {
+        let chord = ChordSymbol::parse(input)?;
+        let formula = chord.formula();
+        let formula_target = formula.pitch_set();
+        let target = required_pitch_set(&chord, &formula);
+        let bass_rule = bass_rule_for_chord(&chord, &tuning);
+        Ok(Self {
+            tuning,
+            target,
+            formula_target,
+            bass_rule,
+            formula,
+        })
+    }
+
+    pub fn breakdown(&self, frets: &[Option<u8>]) -> Result<VoicingScoreBreakdown, ChordClawError> {
+        let string_count = self.tuning.string_count();
+        if frets.len() != string_count {
+            return Err(ChordClawError::new(format!(
+                "fingering has {} strings but tuning has {string_count}",
+                frets.len()
+            )));
+        }
+
+        let mut stack_frets = [None; MAX_STRING_COUNT];
+        let mut current = PitchSet::empty();
+        let mut lowest_pitch = None::<(i16, PitchClass)>;
+
+        for (string, fret) in frets.iter().copied().enumerate() {
+            if let Some(fret) = fret {
+                if fret > MAX_STANDARD_FRET {
+                    return Err(ChordClawError::new(format!(
+                        "invalid fret '{fret}': standard guitar range is 0..={MAX_STANDARD_FRET}"
+                    )));
+                }
+                let pitch = self.tuning.pitch_at(string, fret);
+                current.insert(pitch);
+                let absolute_pitch = self.tuning.absolute_pitch(string, fret);
+                if lowest_pitch.is_none_or(|(current, _)| absolute_pitch < current) {
+                    lowest_pitch = Some((absolute_pitch, pitch));
+                }
+            }
+            stack_frets[string] = fret;
+        }
+
+        let profile = fret_profile(&stack_frets, string_count);
+        if profile.active_count == 0 {
+            return Err(ChordClawError::new("cannot explain a fully muted voicing"));
+        }
+
+        let missing_required = self.target.difference(current);
+        if missing_required
+            .iter()
+            .any(|pitch| !self.formula_target.contains(pitch))
+        {
+            return Err(ChordClawError::new(
+                "voicing does not contain the required slash bass",
+            ));
+        }
+
+        let missing_formula = self.formula_target.difference(current);
+        let omissions = inferred_omission_degrees(missing_formula, &self.formula)
+            .ok_or_else(|| ChordClawError::new("voicing omits a required chord tone"))?;
+
+        if let Some(expected_bass) = self.bass_rule.required()
+            && lowest_pitch.map(|(_, pitch)| pitch) != Some(expected_bass)
+        {
+            return Err(ChordClawError::new(
+                "voicing does not place the required slash bass lowest",
+            ));
+        }
+
+        Ok(voicing_score_breakdown_with_profile(
+            &stack_frets,
+            &self.tuning,
+            self.bass_rule,
+            &self.formula,
+            &omissions,
+            string_count,
+            &profile,
+        ))
+    }
+}
+
+pub fn voicing_score_breakdown_with_tuning(
+    input: &str,
+    tuning: GuitarTuning,
+    frets: &[Option<u8>],
+) -> Result<VoicingScoreBreakdown, ChordClawError> {
+    VoicingScoreContext::new(input, tuning)?.breakdown(frets)
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

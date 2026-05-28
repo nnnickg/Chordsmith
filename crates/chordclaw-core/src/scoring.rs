@@ -1,3 +1,5 @@
+use serde::Serialize;
+
 use crate::formula::ChordFormula;
 use crate::identify::InferredOmission;
 use crate::notes::{GuitarTuning, Instrument, PitchClass};
@@ -5,6 +7,37 @@ use crate::voicing::{
     BassRule, FretProfile, VoicingCandidate, VoicingMode, VoicingOptions, fret_profile,
 };
 use crate::{MAX_DIVERSITY_SCORE_WINDOW, MAX_STRING_COUNT};
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct VoicingScoreBreakdown {
+    pub total: u32,
+    pub position_cost: u32,
+    pub relative_fret_cost: u32,
+    pub fret_span_cost: u32,
+    pub active_string_cost: u32,
+    pub internal_mute_cost: u32,
+    pub adjacent_fret_jump_cost: u32,
+    pub duplicate_pitch_cost: u32,
+    pub high_open_mix_cost: u32,
+    pub low_open_gap_cost: u32,
+    pub preferred_bass_mismatch_cost: u32,
+    pub open_position_bonus: u32,
+    pub open_root_bass_bonus: u32,
+    pub open_bass_grip_bonus: u32,
+    pub closed_shape_bonus: u32,
+    pub barre_grip_bonus: u32,
+    pub compact_low_grip_bonus: u32,
+    pub jazz_shell_bonus: u32,
+    pub harmonic_defect_cost: u32,
+    pub internal_mute_quality_cost: u32,
+    pub trailing_mute_cost: u32,
+    pub sparse_duplicate_pitch_cost: u32,
+    pub open_chord_tone_bypass_cost: u32,
+    pub low_added_ninth_cluster_cost: u32,
+    pub fingering_complexity_cost: u32,
+    pub instrument_cost: u32,
+    pub instrument_bonus: u32,
+}
 
 pub(crate) fn voicing_score_with_profile(
     frets: &[Option<u8>; MAX_STRING_COUNT],
@@ -79,6 +112,141 @@ pub(crate) fn voicing_score_with_profile(
         + fingering_complexity_cost
         + instrument_cost;
     score.saturating_sub(instrument_bonus)
+}
+
+pub(crate) fn voicing_score_breakdown_with_profile(
+    frets: &[Option<u8>; MAX_STRING_COUNT],
+    tuning: &GuitarTuning,
+    bass_rule: BassRule,
+    formula: &ChordFormula,
+    omissions: &[InferredOmission],
+    string_count: usize,
+    profile: &FretProfile,
+) -> VoicingScoreBreakdown {
+    if profile.active_count == 0 {
+        return VoicingScoreBreakdown {
+            total: u32::MAX,
+            position_cost: 0,
+            relative_fret_cost: 0,
+            fret_span_cost: 0,
+            active_string_cost: 0,
+            internal_mute_cost: 0,
+            adjacent_fret_jump_cost: 0,
+            duplicate_pitch_cost: 0,
+            high_open_mix_cost: 0,
+            low_open_gap_cost: 0,
+            preferred_bass_mismatch_cost: 0,
+            open_position_bonus: 0,
+            open_root_bass_bonus: 0,
+            open_bass_grip_bonus: 0,
+            closed_shape_bonus: 0,
+            barre_grip_bonus: 0,
+            compact_low_grip_bonus: 0,
+            jazz_shell_bonus: 0,
+            harmonic_defect_cost: 0,
+            internal_mute_quality_cost: 0,
+            trailing_mute_cost: 0,
+            sparse_duplicate_pitch_cost: 0,
+            open_chord_tone_bypass_cost: 0,
+            low_added_ninth_cluster_cost: 0,
+            fingering_complexity_cost: 0,
+            instrument_cost: 0,
+            instrument_bonus: 0,
+        };
+    }
+
+    let non_open = profile.non_open();
+    let position_cost = position_cost(profile);
+    let relative_fret_cost = relative_fret_cost(profile);
+    let fret_span_cost = fret_span_cost(profile);
+    let active_string_cost = active_string_cost(profile.active_count, string_count);
+    let internal_mute_cost = internal_mute_cost(profile);
+    let adjacent_fret_jump_cost = adjacent_fret_jump_cost(frets, string_count);
+    let duplicate_pitch_cost = duplicate_pitch_cost(frets, tuning, string_count);
+    let high_open_mix_cost = high_open_mix_cost(frets, tuning.instrument(), profile, string_count);
+    let low_open_gap_cost = low_open_gap_cost(frets, string_count);
+    let preferred_bass_mismatch_cost =
+        preferred_bass_mismatch_cost(frets, tuning, bass_rule.preferred(), string_count);
+    let harmonic_defect_cost = voicing_omission_cost(omissions, formula);
+    let internal_mute_quality_cost =
+        internal_mute_quality_cost(profile, formula, tuning.instrument());
+    let trailing_mute_cost = trailing_mute_cost(formula, profile);
+    let sparse_duplicate_pitch_cost =
+        sparse_duplicate_pitch_cost(frets, tuning, formula, profile, string_count);
+    let open_chord_tone_bypass_cost =
+        open_chord_tone_bypass_cost(frets, tuning, formula, profile, string_count);
+    let low_added_ninth_cluster_cost =
+        low_added_ninth_cluster_cost(frets, tuning, formula, string_count);
+    let fingering_complexity_cost = fingering_complexity_cost(frets, string_count);
+    let instrument_cost =
+        instrument_voicing_cost(frets, tuning.instrument(), profile, string_count);
+    let instrument_bonus =
+        instrument_voicing_bonus(frets, tuning.instrument(), formula, profile, string_count);
+    let open_position_bonus = open_position_bonus(profile, string_count);
+    let open_root_bass_bonus =
+        open_root_bass_bonus(frets, tuning, bass_rule.preferred(), string_count);
+    let open_bass_grip_bonus = open_bass_grip_bonus(frets, profile.has_open, string_count);
+    let closed_shape_bonus = closed_shape_bonus(non_open, profile, string_count);
+    let barre_grip_bonus = barre_grip_bonus(frets, non_open, profile, string_count);
+    let compact_low_grip_bonus = compact_low_grip_bonus(profile, string_count);
+    let jazz_shell_bonus = jazz_shell_bonus(formula, profile);
+
+    let mut score = position_cost
+        + relative_fret_cost
+        + fret_span_cost
+        + active_string_cost
+        + internal_mute_cost
+        + adjacent_fret_jump_cost
+        + duplicate_pitch_cost
+        + high_open_mix_cost
+        + low_open_gap_cost
+        + preferred_bass_mismatch_cost;
+    score = score.saturating_sub(open_position_bonus);
+    score = score.saturating_sub(open_root_bass_bonus);
+    score = score.saturating_sub(open_bass_grip_bonus);
+    score = score.saturating_sub(closed_shape_bonus);
+    score = score.saturating_sub(barre_grip_bonus);
+    score = score.saturating_sub(compact_low_grip_bonus);
+    score = score.saturating_sub(jazz_shell_bonus);
+    let score = score
+        + harmonic_defect_cost
+        + internal_mute_quality_cost
+        + trailing_mute_cost
+        + sparse_duplicate_pitch_cost
+        + open_chord_tone_bypass_cost
+        + low_added_ninth_cluster_cost
+        + fingering_complexity_cost
+        + instrument_cost;
+
+    VoicingScoreBreakdown {
+        total: score.saturating_sub(instrument_bonus),
+        position_cost,
+        relative_fret_cost,
+        fret_span_cost,
+        active_string_cost,
+        internal_mute_cost,
+        adjacent_fret_jump_cost,
+        duplicate_pitch_cost,
+        high_open_mix_cost,
+        low_open_gap_cost,
+        preferred_bass_mismatch_cost,
+        open_position_bonus,
+        open_root_bass_bonus,
+        open_bass_grip_bonus,
+        closed_shape_bonus,
+        barre_grip_bonus,
+        compact_low_grip_bonus,
+        jazz_shell_bonus,
+        harmonic_defect_cost,
+        internal_mute_quality_cost,
+        trailing_mute_cost,
+        sparse_duplicate_pitch_cost,
+        open_chord_tone_bypass_cost,
+        low_added_ninth_cluster_cost,
+        fingering_complexity_cost,
+        instrument_cost,
+        instrument_bonus,
+    }
 }
 
 pub(crate) fn rank_voicing_candidates(

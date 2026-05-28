@@ -89,6 +89,34 @@ fn identify_json_outputs_primary_symbol() {
 }
 
 #[test]
+fn identify_explain_prints_ranked_scores() {
+    let output = chordclaw()
+        .args(["identify", "--explain", "x12010"])
+        .output()
+        .expect("run chordclaw identify --explain");
+
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Candidates:"));
+    assert!(stdout.contains("score="));
+    assert!(stdout.contains("class=TheoreticalAlias"));
+}
+
+#[test]
+fn identify_diagram_prints_ascii_strings() {
+    let output = chordclaw()
+        .args(["identify", "--diagram", "x32010"])
+        .output()
+        .expect("run chordclaw identify --diagram");
+
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Diagram:"));
+    assert!(stdout.contains("B|-- 1-- C"));
+    assert!(stdout.contains("E|-- x--"));
+}
+
+#[test]
 fn identify_hides_theoretical_aliases_in_text_output() {
     let output = chordclaw()
         .args(["identify", "x12010"])
@@ -190,6 +218,62 @@ fn voicings_accepts_ukulele_instrument() {
     let first = &value.as_array().expect("voicings array")[0];
     assert_eq!(first["compact"], "0003");
     assert_eq!(first["frets"].as_array().expect("frets array").len(), 4);
+}
+
+#[test]
+fn voicings_explain_prints_score_breakdowns() {
+    let output = chordclaw()
+        .args(["voicings", "--explain", "--limit", "1", "C"])
+        .output()
+        .expect("run chordclaw voicings --explain");
+
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("SCORE"));
+    assert!(stdout.contains("Score breakdown:"));
+    assert!(stdout.contains("costs("));
+    assert!(stdout.contains("bonuses("));
+}
+
+#[test]
+fn voicings_diagram_prints_ascii_strings() {
+    let output = chordclaw()
+        .args(["voicings", "--diagram", "--limit", "1", "C"])
+        .output()
+        .expect("run chordclaw voicings --diagram");
+
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("x32010 notes=C E G C E"));
+    assert!(stdout.contains("B|-- 1-- C"));
+    assert!(stdout.contains("E|-- x--"));
+}
+
+#[test]
+fn voicings_json_explain_includes_score_breakdown() {
+    let output = chordclaw()
+        .args(["voicings", "--json", "--explain", "--limit", "1", "C"])
+        .output()
+        .expect("run chordclaw voicings --json --explain");
+
+    assert_success(&output);
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("valid explained voicings json");
+    let first = &value.as_array().expect("voicings array")[0];
+    assert_eq!(first["score_breakdown"]["total"], first["score"]);
+}
+
+#[test]
+fn diagram_rejects_json_output() {
+    let output = chordclaw()
+        .args(["voicings", "--json", "--diagram", "C"])
+        .output()
+        .expect("run chordclaw voicings --json --diagram");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--diagram cannot be used with --json")
+    );
 }
 
 #[test]

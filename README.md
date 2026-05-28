@@ -14,7 +14,7 @@ chordclaw voicings Em
 
 ## Status
 
-Version 1.3.5. The engine separates chord theory from CLI formatting, uses
+Version 1.4.0. The engine separates chord theory from CLI formatting, uses
 deterministic ranking, and treats chord names as analyses over pitch-class sets
 rather than as chart entries.
 
@@ -53,11 +53,15 @@ chordclaw identify --instrument ukulele --tuning G3,C4,E4,A4 0000
 
 # Emit structured output.
 chordclaw identify --json x12010
+chordclaw identify --explain x12010
+chordclaw identify --diagram x32010
 
 # Generate guitar voicings from a chord symbol.
 chordclaw voicings Em
 chordclaw voicings --tuning D,A,D,G,A,D Dsus4
 chordclaw voicings --max-fret 15 --limit 25 C13b9
+chordclaw voicings --explain --limit 5 C13b9
+chordclaw voicings --diagram --limit 3 C
 chordclaw voicings --min-fret 12 C
 chordclaw voicings --min-fret 12 --max-fret 15 C
 chordclaw voicings --all C
@@ -87,6 +91,8 @@ higher and `--max-fret` is omitted, the CLI scans through fret 30. `alt` means
 the concrete altered dominant set `1 3 b7 b9 #9 b13`. `--all` is capped at
 25,000 generated voicings; `--limit` is capped at 1,000 curated voicings.
 Narrow broad searches with fret and span flags.
+`--explain` prints ranked identify candidates or voicing score components.
+`--diagram` prints ASCII string diagrams and is text-output only.
 
 Identification uses a static generated grammar of common tertian, suspended,
 added-tone, altered-dominant, diminished, half-diminished, slash, and inferred

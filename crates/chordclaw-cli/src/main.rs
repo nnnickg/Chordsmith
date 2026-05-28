@@ -2,10 +2,11 @@ use std::process::ExitCode;
 use std::{fmt, io};
 
 use chordclaw_core::{
-    AnalysisClass, ChordClawError, ChordClawErrorKind, DEFAULT_LIMIT, DEFAULT_MAX_FRET,
-    DEFAULT_MAX_SPAN, DEFAULT_MIN_FRET, GuitarTuning, IdentifyResult, Instrument, MAX_LIMIT,
-    MAX_STANDARD_FRET, VoicingMode, VoicingOptions, analyze_symbol, identify_with_tuning,
-    voicings_with_tuning,
+    AnalysisClass, ChordAnalysis, ChordClawError, ChordClawErrorKind, DEFAULT_LIMIT,
+    DEFAULT_MAX_FRET, DEFAULT_MAX_SPAN, DEFAULT_MIN_FRET, Fingering, GUITAR8_STRING_COUNT,
+    GuitarTuning, IdentifyResult, Instrument, MAX_LIMIT, MAX_STANDARD_FRET, Voicing, VoicingMode,
+    VoicingOptions, VoicingScoreBreakdown, VoicingScoreContext, analyze_symbol,
+    identify_fingering_with_tuning, voicings_with_tuning,
 };
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use clap_complete::{Shell, generate};
@@ -125,6 +126,18 @@ fn cli() -> Command {
                         .action(ArgAction::SetTrue),
                 )
                 .arg(
+                    Arg::new("explain")
+                        .long("explain")
+                        .help("Print ranked analysis candidates with scores")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("diagram")
+                        .long("diagram")
+                        .help("Print an ASCII string diagram")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
                     Arg::new("instrument")
                         .long("instrument")
                         .value_name("INSTRUMENT")
@@ -142,6 +155,18 @@ fn cli() -> Command {
                     Arg::new("json")
                         .long("json")
                         .help("Emit JSON")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("explain")
+                        .long("explain")
+                        .help("Print voicing score breakdowns")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("diagram")
+                        .long("diagram")
+                        .help("Print ASCII string diagrams")
                         .action(ArgAction::SetTrue),
                 )
                 .arg(
@@ -204,18 +229,31 @@ fn cli() -> Command {
 }
 
 fn cmd_identify(matches: &ArgMatches) -> Result<(), CliError> {
-    let fingering = required_string(matches, "fingering")?;
+    if matches.get_flag("json") && matches.get_flag("diagram") {
+        return Err(CliError::usage("--diagram cannot be used with --json"));
+    }
+    let fingering_text = required_string(matches, "fingering")?;
     let instrument = optional_instrument(matches)?;
     let tuning = optional_tuning(matches, instrument)?;
-    let result = identify_with_tuning(fingering, tuning)?;
+    let fingering = Fingering::parse_with_string_count(fingering_text, tuning.string_count())?;
+    let result = identify_fingering_with_tuning(&fingering, tuning)?;
     if matches.get_flag("json") {
         write_json(&result)
     } else {
-        print_identify(&result)
+        print_identify(
+            &result,
+            &fingering,
+            tuning,
+            matches.get_flag("explain"),
+            matches.get_flag("diagram"),
+        )
     }
 }
 
 fn cmd_voicings(matches: &ArgMatches) -> Result<(), CliError> {
+    if matches.get_flag("json") && matches.get_flag("diagram") {
+        return Err(CliError::usage("--diagram cannot be used with --json"));
+    }
     let chord = required_string(matches, "chord")?;
     let instrument = optional_instrument(matches)?;
     let tuning = optional_tuning(matches, instrument)?;
@@ -251,9 +289,19 @@ fn cmd_voicings(matches: &ArgMatches) -> Result<(), CliError> {
 
     let results = voicings_with_tuning(chord, tuning, options)?;
     if matches.get_flag("json") {
-        write_json(&results)
+        if matches.get_flag("explain") {
+            write_explained_voicings_json(chord, tuning, &results)
+        } else {
+            write_json(&results)
+        }
     } else {
-        print_voicings(&results)
+        print_voicings(
+            chord,
+            tuning,
+            &results,
+            matches.get_flag("explain"),
+            matches.get_flag("diagram"),
+        )
     }
 }
 
@@ -378,13 +426,50 @@ fn optional_tuning(
 fn write_json<T: serde::Serialize>(value: &T) -> Result<(), CliError> {
     let stdout = io::stdout();
     let mut lock = stdout.lock();
-    if let Err(error) = serde_json::to_writer(&mut lock, value) {
+    write_json_to(&mut lock, value)?;
+    write_stdout(writeln!(lock))
+}
+
+fn write_json_to<T: serde::Serialize>(out: &mut impl Write, value: &T) -> Result<(), CliError> {
+    if let Err(error) = serde_json::to_writer(out, value) {
         if error.io_error_kind() == Some(io::ErrorKind::BrokenPipe) {
             return Ok(());
         }
         return Err(CliError::internal(format!("write json: {error}")));
     }
-    write_stdout(writeln!(lock))
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct ExplainedVoicing<'a> {
+    #[serde(flatten)]
+    voicing: &'a Voicing,
+    score_breakdown: VoicingScoreBreakdown,
+}
+
+fn write_explained_voicings_json(
+    chord: &str,
+    tuning: GuitarTuning,
+    results: &[Voicing],
+) -> Result<(), CliError> {
+    let score_context = VoicingScoreContext::new(chord, tuning)?;
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+    write_stdout(write!(out, "["))?;
+    for (idx, result) in results.iter().enumerate() {
+        if idx > 0 {
+            write_stdout(write!(out, ","))?;
+        }
+        let score_breakdown = score_context.breakdown(&result.frets)?;
+        write_json_to(
+            &mut out,
+            &ExplainedVoicing {
+                voicing: result,
+                score_breakdown,
+            },
+        )?;
+    }
+    write_stdout(writeln!(out, "]"))
 }
 
 fn write_stdout(result: io::Result<()>) -> Result<(), CliError> {
@@ -407,7 +492,13 @@ fn print_analyze(
     write_stdout(writeln!(out, "Intervals: {}", intervals.join(" ")))
 }
 
-fn print_identify(result: &IdentifyResult) -> Result<(), CliError> {
+fn print_identify(
+    result: &IdentifyResult,
+    fingering: &Fingering,
+    tuning: GuitarTuning,
+    explain: bool,
+    diagram: bool,
+) -> Result<(), CliError> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     write_stdout(writeln!(out, "Input: {}", result.fingering))?;
@@ -445,15 +536,74 @@ fn print_identify(result: &IdentifyResult) -> Result<(), CliError> {
         None => write_stdout(writeln!(out, "Primary: Unknown"))?,
     }
 
+    if explain {
+        print_identify_explain(&mut out, result)?;
+    }
+    if diagram {
+        write_stdout(writeln!(out))?;
+        print_identify_diagram(&mut out, fingering, tuning, result)?;
+    }
+
     Ok(())
 }
 
-fn print_voicings(results: &[chordclaw_core::Voicing]) -> Result<(), CliError> {
+fn print_identify_explain(out: &mut impl Write, result: &IdentifyResult) -> Result<(), CliError> {
+    write_stdout(writeln!(out, "Candidates:"))?;
+    if let Some(primary) = &result.primary {
+        print_analysis_candidate(out, 1, primary)?;
+    }
+    for (idx, analysis) in result.aliases.iter().take(8).enumerate() {
+        print_analysis_candidate(out, idx + 2, analysis)?;
+    }
+    Ok(())
+}
+
+fn print_analysis_candidate(
+    out: &mut impl Write,
+    idx: usize,
+    analysis: &ChordAnalysis,
+) -> Result<(), CliError> {
+    write_stdout(write!(
+        out,
+        "  {idx}. {} score={} class={:?} confidence={:?} intervals=",
+        analysis.symbol, analysis.score, analysis.class, analysis.confidence
+    ))?;
+    write_stdout(write_joined_strings(out, &analysis.intervals, " "))?;
+    if !analysis.omissions.is_empty() {
+        write_stdout(write!(out, " omit="))?;
+        write_stdout(write_joined_strings(out, &analysis.omissions, ","))?;
+    }
+    write_stdout(writeln!(out))
+}
+
+fn print_voicings(
+    chord: &str,
+    tuning: GuitarTuning,
+    results: &[Voicing],
+    explain: bool,
+    diagram: bool,
+) -> Result<(), CliError> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
     if results.is_empty() {
         write_stdout(writeln!(out, "No voicings found."))?;
+        return Ok(());
+    }
+
+    let score_context = if explain {
+        Some(VoicingScoreContext::new(chord, tuning)?)
+    } else {
+        None
+    };
+
+    if diagram {
+        for (idx, result) in results.iter().enumerate() {
+            if idx > 0 {
+                write_stdout(writeln!(out))?;
+            }
+            print_voicing_diagram_block(&mut out, tuning, result, score_context.as_ref())?;
+        }
         return Ok(());
     }
 
@@ -466,11 +616,43 @@ fn print_voicings(results: &[chordclaw_core::Voicing]) -> Result<(), CliError> {
         .max(12);
     let notes_width = results
         .iter()
-        .map(|result| result.notes.join(" ").len())
+        .map(|result| joined_string_len(&result.notes, 1))
         .max()
         .unwrap_or(0)
         .max(24);
-    if has_omissions {
+    let score_width = if explain {
+        results
+            .iter()
+            .map(|result| decimal_width(result.score))
+            .max()
+            .unwrap_or(0)
+            .max(5)
+    } else {
+        0
+    };
+    if explain && has_omissions {
+        write_stdout(writeln!(
+            out,
+            "{:<compact_width$} | {:>score_width$} | {:<notes_width$} | OMIT",
+            "COMPACT", "SCORE", "NOTES"
+        ))?;
+        write_stdout(writeln!(
+            out,
+            "{}",
+            "-".repeat(compact_width + score_width + notes_width + 13)
+        ))?;
+    } else if explain {
+        write_stdout(writeln!(
+            out,
+            "{:<compact_width$} | {:>score_width$} | NOTES",
+            "COMPACT", "SCORE"
+        ))?;
+        write_stdout(writeln!(
+            out,
+            "{}",
+            "-".repeat(compact_width + score_width + 11)
+        ))?;
+    } else if has_omissions {
         write_stdout(writeln!(
             out,
             "{:<compact_width$} | {:<notes_width$} | OMIT",
@@ -486,23 +668,287 @@ fn print_voicings(results: &[chordclaw_core::Voicing]) -> Result<(), CliError> {
         write_stdout(writeln!(out, "{}", "-".repeat(compact_width + 8)))?;
     }
     for result in results {
-        if has_omissions {
-            write_stdout(writeln!(
+        if explain && has_omissions {
+            write_stdout(write!(
                 out,
-                "{:<compact_width$} | {:<notes_width$} | {}",
-                result.compact,
-                result.notes.join(" "),
-                result.omissions.join(",")
+                "{:<compact_width$} | {:>score_width$} | ",
+                result.compact, result.score
             ))?;
+            write_padded_joined_strings(&mut out, &result.notes, " ", notes_width)?;
+            write_stdout(write!(out, " | "))?;
+            write_stdout(write_joined_strings(&mut out, &result.omissions, ","))?;
+            write_stdout(writeln!(out))?;
+        } else if explain {
+            write_stdout(write!(
+                out,
+                "{:<compact_width$} | {:>score_width$} | ",
+                result.compact, result.score
+            ))?;
+            write_stdout(write_joined_strings(&mut out, &result.notes, " "))?;
+            write_stdout(writeln!(out))?;
+        } else if has_omissions {
+            write_stdout(write!(out, "{:<compact_width$} | ", result.compact))?;
+            write_padded_joined_strings(&mut out, &result.notes, " ", notes_width)?;
+            write_stdout(write!(out, " | "))?;
+            write_stdout(write_joined_strings(&mut out, &result.omissions, ","))?;
+            write_stdout(writeln!(out))?;
         } else {
-            write_stdout(writeln!(
-                out,
-                "{:<compact_width$} | {}",
-                result.compact,
-                result.notes.join(" ")
-            ))?;
+            write_stdout(write!(out, "{:<compact_width$} | ", result.compact))?;
+            write_stdout(write_joined_strings(&mut out, &result.notes, " "))?;
+            write_stdout(writeln!(out))?;
+        }
+    }
+
+    if explain {
+        write_stdout(writeln!(out))?;
+        write_stdout(writeln!(out, "Score breakdown:"))?;
+        if let Some(score_context) = &score_context {
+            for result in results {
+                let breakdown = score_context.breakdown(&result.frets)?;
+                write_score_breakdown(&mut out, result.compact.as_str(), &breakdown)?;
+            }
         }
     }
 
     Ok(())
+}
+
+fn print_voicing_diagram_block(
+    out: &mut impl Write,
+    tuning: GuitarTuning,
+    result: &Voicing,
+    score_context: Option<&VoicingScoreContext>,
+) -> Result<(), CliError> {
+    write_stdout(write!(out, "{}", result.compact))?;
+    if score_context.is_some() {
+        write_stdout(write!(out, " score={}", result.score))?;
+    }
+    if !result.omissions.is_empty() {
+        write_stdout(write!(out, " omit="))?;
+        write_stdout(write_joined_strings(out, &result.omissions, ","))?;
+    }
+    write_stdout(write!(out, " notes="))?;
+    write_stdout(write_joined_strings(out, &result.notes, " "))?;
+    write_stdout(writeln!(out))?;
+    print_voicing_diagram(out, tuning, result)?;
+    if let Some(score_context) = score_context {
+        let breakdown = score_context.breakdown(&result.frets)?;
+        write_score_breakdown(out, result.compact.as_str(), &breakdown)?;
+    }
+    Ok(())
+}
+
+fn print_identify_diagram(
+    out: &mut impl Write,
+    fingering: &Fingering,
+    tuning: GuitarTuning,
+    result: &IdentifyResult,
+) -> Result<(), CliError> {
+    write_stdout(writeln!(out, "Diagram:"))?;
+    for string in (0..tuning.string_count()).rev() {
+        write_stdout(write!(out, "{:>3}|", tuning.notes()[string]))?;
+        write_fret_cell(out, fingering.frets()[string])?;
+        if let Some(note) = result.notes.iter().find(|note| note.string == string) {
+            write_stdout(write!(out, " {}", note.note))?;
+        }
+        write_stdout(writeln!(out))?;
+    }
+    Ok(())
+}
+
+fn print_voicing_diagram(
+    out: &mut impl Write,
+    tuning: GuitarTuning,
+    result: &Voicing,
+) -> Result<(), CliError> {
+    let mut note_by_string = [None::<&str>; GUITAR8_STRING_COUNT];
+    let mut note_idx = 0usize;
+    for (string, fret) in result.frets.iter().enumerate() {
+        if fret.is_some() {
+            note_by_string[string] = result.notes.get(note_idx).map(String::as_str);
+            note_idx += 1;
+        }
+    }
+
+    for string in (0..tuning.string_count()).rev() {
+        write_stdout(write!(out, "{:>3}|", tuning.notes()[string]))?;
+        write_fret_cell(out, result.frets[string])?;
+        if let Some(note) = note_by_string[string] {
+            write_stdout(write!(out, " {note}"))?;
+        }
+        write_stdout(writeln!(out))?;
+    }
+    Ok(())
+}
+
+fn write_fret_cell(out: &mut impl Write, fret: Option<u8>) -> Result<(), CliError> {
+    match fret {
+        Some(fret) => write_stdout(write!(out, "--{fret:>2}--")),
+        None => write_stdout(write!(out, "-- x--")),
+    }
+}
+
+fn write_score_breakdown(
+    out: &mut impl Write,
+    compact: &str,
+    breakdown: &VoicingScoreBreakdown,
+) -> Result<(), CliError> {
+    write_stdout(write!(
+        out,
+        "{compact}: score total={} costs(",
+        breakdown.total
+    ))?;
+    let mut wrote = false;
+    write_component(out, &mut wrote, "position", breakdown.position_cost)?;
+    write_component(out, &mut wrote, "relative", breakdown.relative_fret_cost)?;
+    write_component(out, &mut wrote, "span", breakdown.fret_span_cost)?;
+    write_component(out, &mut wrote, "strings", breakdown.active_string_cost)?;
+    write_component(
+        out,
+        &mut wrote,
+        "internal_mute",
+        breakdown.internal_mute_cost,
+    )?;
+    write_component(
+        out,
+        &mut wrote,
+        "adjacent_jump",
+        breakdown.adjacent_fret_jump_cost,
+    )?;
+    write_component(out, &mut wrote, "duplicate", breakdown.duplicate_pitch_cost)?;
+    write_component(out, &mut wrote, "high_open", breakdown.high_open_mix_cost)?;
+    write_component(out, &mut wrote, "low_open_gap", breakdown.low_open_gap_cost)?;
+    write_component(
+        out,
+        &mut wrote,
+        "bass_mismatch",
+        breakdown.preferred_bass_mismatch_cost,
+    )?;
+    write_component(out, &mut wrote, "omission", breakdown.harmonic_defect_cost)?;
+    write_component(
+        out,
+        &mut wrote,
+        "mute_quality",
+        breakdown.internal_mute_quality_cost,
+    )?;
+    write_component(
+        out,
+        &mut wrote,
+        "trailing_mute",
+        breakdown.trailing_mute_cost,
+    )?;
+    write_component(
+        out,
+        &mut wrote,
+        "sparse_duplicate",
+        breakdown.sparse_duplicate_pitch_cost,
+    )?;
+    write_component(
+        out,
+        &mut wrote,
+        "open_bypass",
+        breakdown.open_chord_tone_bypass_cost,
+    )?;
+    write_component(
+        out,
+        &mut wrote,
+        "low_ninth",
+        breakdown.low_added_ninth_cluster_cost,
+    )?;
+    write_component(
+        out,
+        &mut wrote,
+        "fingers",
+        breakdown.fingering_complexity_cost,
+    )?;
+    write_component(out, &mut wrote, "instrument", breakdown.instrument_cost)?;
+    if !wrote {
+        write_stdout(write!(out, "none"))?;
+    }
+    write_stdout(write!(out, ") bonuses("))?;
+    wrote = false;
+    write_component(
+        out,
+        &mut wrote,
+        "open_position",
+        breakdown.open_position_bonus,
+    )?;
+    write_component(out, &mut wrote, "open_root", breakdown.open_root_bass_bonus)?;
+    write_component(out, &mut wrote, "open_bass", breakdown.open_bass_grip_bonus)?;
+    write_component(out, &mut wrote, "closed", breakdown.closed_shape_bonus)?;
+    write_component(out, &mut wrote, "barre", breakdown.barre_grip_bonus)?;
+    write_component(
+        out,
+        &mut wrote,
+        "compact_low",
+        breakdown.compact_low_grip_bonus,
+    )?;
+    write_component(out, &mut wrote, "jazz_shell", breakdown.jazz_shell_bonus)?;
+    write_component(out, &mut wrote, "instrument", breakdown.instrument_bonus)?;
+    if !wrote {
+        write_stdout(write!(out, "none"))?;
+    }
+    write_stdout(writeln!(out, ")"))
+}
+
+fn write_component(
+    out: &mut impl Write,
+    wrote: &mut bool,
+    name: &str,
+    value: u32,
+) -> Result<(), CliError> {
+    if value == 0 {
+        return Ok(());
+    }
+    if *wrote {
+        write_stdout(write!(out, ", "))?;
+    }
+    *wrote = true;
+    write_stdout(write!(out, "{name}={value}"))
+}
+
+fn joined_string_len(items: &[String], separator_len: usize) -> usize {
+    if items.is_empty() {
+        return 0;
+    }
+    items.iter().map(String::len).sum::<usize>() + separator_len * (items.len() - 1)
+}
+
+fn write_padded_joined_strings(
+    out: &mut impl Write,
+    items: &[String],
+    separator: &str,
+    width: usize,
+) -> Result<(), CliError> {
+    let len = joined_string_len(items, separator.len());
+    write_stdout(write_joined_strings(out, items, separator))?;
+    write_padding(out, width.saturating_sub(len))
+}
+
+fn write_joined_strings(out: &mut impl Write, items: &[String], separator: &str) -> io::Result<()> {
+    for (idx, item) in items.iter().enumerate() {
+        if idx > 0 {
+            out.write_all(separator.as_bytes())?;
+        }
+        out.write_all(item.as_bytes())?;
+    }
+    Ok(())
+}
+
+fn write_padding(out: &mut impl Write, mut count: usize) -> Result<(), CliError> {
+    const SPACES: &[u8; 32] = b"                                ";
+    while count >= SPACES.len() {
+        write_stdout(out.write_all(SPACES))?;
+        count -= SPACES.len();
+    }
+    write_stdout(out.write_all(&SPACES[..count]))
+}
+
+const fn decimal_width(mut value: u32) -> usize {
+    let mut width = 1usize;
+    while value >= 10 {
+        value /= 10;
+        width += 1;
+    }
+    width
 }

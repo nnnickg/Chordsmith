@@ -1377,6 +1377,25 @@ fn bounded_default_voicings_match_unbounded_ranking() {
 }
 
 #[test]
+fn voicing_score_breakdown_matches_generated_score() {
+    let tuning = STANDARD_TUNING;
+    let score_context = VoicingScoreContext::new("C13b9", tuning).unwrap();
+    let shapes = voicings(
+        "C13b9",
+        VoicingOptions {
+            mode: VoicingMode::Curated { limit: 8 },
+            ..VoicingOptions::default()
+        },
+    )
+    .unwrap();
+
+    for shape in shapes {
+        let breakdown = score_context.breakdown(&shape.frets).unwrap();
+        assert_eq!(breakdown.total, shape.score, "{}", shape.compact);
+    }
+}
+
+#[test]
 fn zero_limit_skips_default_voicing_collection() {
     let shapes = voicings(
         "C",

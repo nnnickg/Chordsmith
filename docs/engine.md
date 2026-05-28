@@ -60,6 +60,9 @@ The default list is curated for quality first and diversity second. Diversity
 can only choose among nearby raw scores; `--all` returns every generated voicing
 sorted by raw score.
 
+`chordclaw voicings --explain` exposes the selected voicings' score components;
+the default generation path does not retain per-candidate diagnostics.
+
 Default voicing collection is bounded but exact: the engine keeps the raw top-k
 score frontier plus the maximum diversity window, then runs the same diversity
 ranker on that reduced pool. This preserves the same result as ranking every

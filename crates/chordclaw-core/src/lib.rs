@@ -77,8 +77,12 @@ pub use notes::{
     STANDARD_8_STRING_TUNING_NOTES, STANDARD_TUNING, STANDARD_TUNING_NOTES,
     STANDARD_UKULELE_TUNING, STANDARD_UKULELE_TUNING_NOTES, Tuning, UKULELE_TUNING, UkuleleTuning,
 };
+pub use scoring::VoicingScoreBreakdown;
 pub use symbol::{Alteration, ChordSpec, ChordSymbol, Extension, Quality, Seventh};
-pub use voicing::{Voicing, VoicingMode, VoicingOptions, voicings, voicings_with_tuning};
+pub use voicing::{
+    Voicing, VoicingMode, VoicingOptions, VoicingScoreContext, voicing_score_breakdown_with_tuning,
+    voicings, voicings_with_tuning,
+};
 
 #[cfg(test)]
 mod tests;
