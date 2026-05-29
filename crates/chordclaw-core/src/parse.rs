@@ -119,12 +119,22 @@ pub(crate) fn parse_descriptor(input: &str) -> Result<ChordSpec, ChordClawError>
     let mut rest = text.as_ref();
 
     if !starts_with_major_extension(rest)
-        && let Some(next) = take_prefix(rest, &["min", "Min", "MIN", "m", "-"])
+        && let Some(next) = take_prefix(rest, &["min", "Min", "MIN"])
     {
         set_quality(&mut spec, &mut explicit_quality, Quality::Minor, "m")?;
         rest = next;
     } else if !starts_with_major_extension(rest)
-        && let Some(next) = take_prefix(rest, &["maj", "Maj", "MAJ", "M"])
+        && let Some(next) = take_prefix(rest, &["maj", "Maj", "MAJ"])
+    {
+        set_quality(&mut spec, &mut explicit_quality, Quality::Major, "maj")?;
+        rest = next;
+    } else if !starts_with_major_extension(rest)
+        && let Some(next) = take_prefix(rest, &["m", "-"])
+    {
+        set_quality(&mut spec, &mut explicit_quality, Quality::Minor, "m")?;
+        rest = next;
+    } else if !starts_with_major_extension(rest)
+        && let Some(next) = take_prefix(rest, &["M"])
     {
         set_quality(&mut spec, &mut explicit_quality, Quality::Major, "maj")?;
         rest = next;

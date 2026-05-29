@@ -753,6 +753,19 @@ fn parses_major_seventh_as_major_not_dominant() {
 }
 
 #[test]
+fn parses_lowercase_bare_major_descriptor() {
+    for (input, expected) in [
+        ("Cmaj", "C"),
+        ("Cmaj6", "C6"),
+        ("Cmajadd9", "Cadd9"),
+        ("Cmajno5", "Cno5"),
+    ] {
+        let (symbol, _) = analyze_symbol(input).unwrap();
+        assert_eq!(symbol.name(), expected, "{input}");
+    }
+}
+
+#[test]
 fn parses_common_chart_symbol_synonyms() {
     let (symbol, _) = analyze_symbol("CΔ7").unwrap();
     assert_eq!(symbol.name(), "Cmaj7");
@@ -1429,6 +1442,16 @@ fn voicing_score_breakdown_matches_generated_score() {
         let breakdown = score_context.breakdown(&shape.frets).unwrap();
         assert_eq!(breakdown.total, shape.score, "{}", shape.compact);
     }
+}
+
+#[test]
+fn voicing_score_breakdown_rejects_extra_pitches() {
+    let score_context = VoicingScoreContext::new("C", STANDARD_TUNING).unwrap();
+    let error = score_context
+        .breakdown(&[None, Some(3), Some(0), Some(0), Some(1), Some(0)])
+        .expect_err("non-chord pitch should fail");
+
+    assert!(error.to_string().contains("outside the chord"), "{error}");
 }
 
 #[test]

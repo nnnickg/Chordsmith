@@ -245,6 +245,12 @@ impl VoicingScoreContext {
             return Err(ChordClawError::new("cannot explain a fully muted voicing"));
         }
 
+        if !current.difference(self.target).is_empty() {
+            return Err(ChordClawError::new(
+                "voicing contains notes outside the chord",
+            ));
+        }
+
         let missing_required = self.target.difference(current);
         if missing_required
             .iter()
